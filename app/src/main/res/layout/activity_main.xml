@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#fff8f0"
+    android:fillViewport="true"
+    android:fitsSystemWindows="true"> <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:layout_marginTop="16dp"
+        android:fontFamily="@font/libre_baskerville"
+        android:text="BabyGuard"
+        android:textColor="#333333"
+        android:textSize="36sp"
+        android:textStyle="bold|italic" />
+
+    <androidx.cardview.widget.CardView
+        android:layout_width="match_parent"
+        android:layout_height="119dp"
+        android:layout_marginBottom="16dp"
+        app:cardCornerRadius="24dp"
+        app:cardElevation="0dp">
+
+        <ImageView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#DDDDDD"
+            android:scaleType="centerCrop"
+            android:src="@drawable/babyguarddashboard" />
+    </androidx.cardview.widget.CardView>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Hello! Let's set up your safe space"
+        android:fontFamily="sans-serif"
+        android:textStyle="italic"
+        android:textSize="18sp"
+        android:textColor="#333333"
+        android:layout_marginBottom="4dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="which device is this?"
+        android:fontFamily="sans-serif"
+        android:textSize="14sp"
+        android:textColor="#333333"
+        android:layout_marginBottom="24dp"/>
+
+    <soup.neumorphism.NeumorphCardView
+        android:id="@+id/cardCameraMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:neumorph_backgroundColor="#b4d7ff"
+        app:neumorph_shapeType="flat"
+        android:clickable="true"
+        android:focusable="true"
+        android:layout_marginBottom="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="20dp">
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="100dp"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                android:layout_marginBottom="12dp">
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:src="@drawable/babyunit"
+                    android:scaleType="centerCrop"
+                    android:background="#99AACC"/>
+            </androidx.cardview.widget.CardView>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Baby's Unit (Camera)"
+                android:fontFamily="sans-serif"
+                android:textColor="#A37BFF"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:textAlignment="center"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Place this device in the nursery"
+                android:fontFamily="sans-serif"
+                android:textColor="#7E57C2"
+                android:textSize="14sp"
+                android:textAlignment="center"/>
+        </LinearLayout>
+    </soup.neumorphism.NeumorphCardView>
+
+    <soup.neumorphism.NeumorphCardView
+        android:id="@+id/cardParentMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:neumorph_backgroundColor="#b4d7ff"
+        app:neumorph_shapeType="flat"
+        android:clickable="true"
+        android:focusable="true"
+        android:layout_marginBottom="24dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="20dp">
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="100dp"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                android:layout_marginBottom="12dp">
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:src="@drawable/parentunit"
+                    android:scaleType="centerCrop"
+                    android:background="#99AACC"/>
+            </androidx.cardview.widget.CardView>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Parent's Unit (Monitor)"
+                android:fontFamily="sans-serif"
+                android:textColor="#A37BFF"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:textAlignment="center"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Keep this device with you"
+                android:fontFamily="sans-serif"
+                android:textColor="#7E57C2"
+                android:textSize="14sp"
+                android:textAlignment="center"/>
+        </LinearLayout>
+    </soup.neumorphism.NeumorphCardView>
+
+</LinearLayout>
+</ScrollView>
