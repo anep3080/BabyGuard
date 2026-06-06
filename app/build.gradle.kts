@@ -4,20 +4,16 @@ plugins {
 
 android {
     namespace = "com.example.babyguard"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
+    compileSdk = 35
 
-        androidResources {
-            noCompress += "tflite"
-        }
+    androidResources {
+        noCompress += "tflite"
     }
 
     defaultConfig {
         applicationId = "com.example.babyguard"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -48,12 +44,21 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    
+    // Lifecycle and Coroutines
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
+
     // CameraX core library
-    val camerax_version = "1.3.1"
+    val camerax_version = "1.4.1"
     implementation("androidx.camera:camera-core:${camerax_version}")
     implementation("androidx.camera:camera-camera2:${camerax_version}")
     implementation("androidx.camera:camera-lifecycle:${camerax_version}")
     implementation("androidx.camera:camera-view:${camerax_version}")
+
+    // UVC Camera Support (Reliable wrapper)
+    implementation("com.github.jiangdongguo:AndroidUSBCamera:2.3.4")
+
     implementation(project(":opencv"))
     // TensorFlow Lite for YOLOv8
     implementation("org.tensorflow:tensorflow-lite:2.17.0")

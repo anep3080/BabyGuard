@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Catch-all filter to ensure we get notified for any USB device and then filter in code -->
+    <usb-device />
+</resources>

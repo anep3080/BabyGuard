@@ -6,32 +6,30 @@ import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
 
-class AlertServer(private val onAlertReceived: (String, String) -> Unit) : Thread() {
-
+class CommandServer(private val onCommandReceived: (String) -> Unit) : Thread() {
     private var serverSocket: ServerSocket? = null
     @Volatile var isRunning = true
 
     override fun run() {
         try {
-            serverSocket = ServerSocket(8888)
-            Log.i("BabyGuard_Server", "🎧 Alert Server listening on Port 8888...")
+            serverSocket = ServerSocket(8890) // Command port
+            Log.i("BabyGuard_CmdServer", "📡 Command Server listening on Port 8890...")
 
             while (isRunning) {
                 val socket: Socket = serverSocket!!.accept()
-                val babyIp = socket.inetAddress.hostAddress ?: ""
-                
                 val input = BufferedReader(InputStreamReader(socket.inputStream))
-                val message = input.readLine()
+                val command = input.readLine()
 
-                if (message != null) {
-                    onAlertReceived(message, babyIp)
+                if (command != null) {
+                    Log.d("BabyGuard_CmdServer", "🎮 Received Command: $command")
+                    onCommandReceived(command)
                 }
 
                 input.close()
                 socket.close()
             }
         } catch (e: Exception) {
-            if (isRunning) Log.e("BabyGuard_Server", "❌ Server Error: ${e.message}")
+            if (isRunning) Log.e("BabyGuard_CmdServer", "❌ Command Server Error: ${e.message}")
         }
     }
 

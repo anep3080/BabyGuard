@@ -12,6 +12,8 @@ class MotionDetector {
     private val mog2: BackgroundSubtractorMOG2 = Video.createBackgroundSubtractorMOG2()
     private val matFrame = Mat()
     private val fgMask = Mat()
+    
+    @Volatile var motionThreshold = 3000 // Default sensitivity
 
     fun hasMotion(bitmap: Bitmap): Boolean {
         try {
@@ -19,8 +21,9 @@ class MotionDetector {
             mog2.apply(matFrame, fgMask)
 
             val movingPixels = Core.countNonZero(fgMask)
-            val motionThreshold = 3000 // Tweak this if it's too sensitive!
-
+            
+            // Note: Sensitivity is usually inverse to threshold. 
+            // If user sets "High Sensitivity", threshold should be lower.
             return movingPixels > motionThreshold
         } catch (e: Exception) {
             Log.e("BabyGuard_MOG2", "Motion detection failed: ${e.message}")

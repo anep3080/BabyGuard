@@ -5,17 +5,32 @@
     android:layout_height="match_parent"
     android:background="#4A4A4A">
 
-    <androidx.camera.view.PreviewView
-        android:id="@+id/viewFinder"
+    <!-- Container for Camera Previews -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="250dp"/>
+        android:layout_marginBottom="280dp">
 
-    <com.example.babyguard.OverlayView
-        android:id="@+id/overlayView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_marginBottom="250dp"/>
+        <!-- Standard CameraX Preview (Internal Cameras) -->
+        <androidx.camera.view.PreviewView
+            android:id="@+id/viewFinder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="visible"/>
+
+        <!-- UVC Camera Preview (External Night Vision) -->
+        <!-- Using TextureView as a base if UVCCameraTextureView is unresolved -->
+        <com.serenegiant.usb.widget.UVCCameraTextureView
+            android:id="@+id/uvc_camera_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"/>
+
+        <com.example.babyguard.OverlayView
+            android:id="@+id/overlayView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"/>
+    </FrameLayout>
 
     <TextView
         android:id="@+id/tvStatus"
@@ -25,30 +40,112 @@
         android:layout_marginTop="32dp"
         android:background="@drawable/pill_background"
         android:backgroundTint="#E5B800"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
         android:text="Waiting for Parent..."
         android:textColor="#FFFFFF"
         android:textSize="16sp"
         android:textStyle="bold" />
 
     <LinearLayout
+        android:id="@+id/bottomControls"
         android:layout_width="match_parent"
-        android:layout_height="250dp"
+        android:layout_height="280dp"
         android:layout_gravity="bottom"
         android:orientation="vertical"
         android:padding="24dp"
         android:background="#4A4A4A">
 
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Quick Tip: The smart monitoring works best with soft lighting, like a dim nightlight, so we can see baby clearly without disturbing their sleep."
-            android:textColor="#FFFFFF"
-            android:textSize="13sp"
-            android:layout_marginBottom="32dp"/>
+            android:orientation="horizontal"
+            android:layout_marginBottom="12dp">
+
+            <Button
+                android:id="@+id/btnSwitchCamera"
+                android:layout_width="0dp"
+                android:layout_height="54dp"
+                android:layout_weight="1"
+                android:text="🔄 SELECT CAMERA"
+                android:backgroundTint="#A9CFFF"
+                android:textColor="#FFFFFF"
+                android:layout_marginEnd="4dp"
+                android:textStyle="bold"
+                android:textSize="12sp"/>
+
+            <Button
+                android:id="@+id/btnRotateCamera"
+                android:layout_width="0dp"
+                android:layout_height="54dp"
+                android:layout_weight="1"
+                android:text="📐 ROTATE"
+                android:backgroundTint="#A9CFFF"
+                android:textColor="#FFFFFF"
+                android:layout_marginStart="4dp"
+                android:textStyle="bold"
+                android:textSize="12sp"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/layoutUnpaired"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="visible">
+
+            <Button
+                android:id="@+id/btnBroadcast"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:text="📡 START PAIRING"
+                android:backgroundTint="#2196F3"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:layout_marginBottom="12dp"/>
+
+            <Button
+                android:id="@+id/btnRefreshCamerasUnpaired"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:text="📷 INITIALIZE USB CAMERA"
+                android:backgroundTint="#81C784"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:textSize="12sp"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/layoutPairedControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Connected to Parent Unit"
+                android:textColor="#81C784"
+                android:textStyle="bold"
+                android:textSize="14sp"
+                android:textAlignment="center"
+                android:layout_marginBottom="12dp"/>
+
+            <Button
+                android:id="@+id/btnRefreshCamerasPaired"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:text="📷 INITIALIZE USB CAMERA"
+                android:backgroundTint="#81C784"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:textSize="12sp"/>
+        </LinearLayout>
+
+        <View android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -61,8 +158,8 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:orientation="vertical">
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Sleep Screen" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="16sp"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="(Makes screen very dark so light doesn't disturb baby)" android:textColor="#CCCCCC" android:textSize="10sp"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Sleep Screen" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="14sp"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Double-tap to wake" android:textColor="#CCCCCC" android:textSize="10sp"/>
             </LinearLayout>
 
             <androidx.appcompat.widget.SwitchCompat

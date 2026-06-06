@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -37,17 +38,18 @@ class BabyGuardService : Service() {
     private fun startListeningForAlerts() {
         if (alertServer == null) {
             Log.i("BabyGuardService", "🛡️ Shield Activated. Listening on Port 8888...")
-            alertServer = AlertServer { incomingJson ->
+            alertServer = AlertServer { incomingJson, babyIp ->
                 try {
                     val jsonObject = org.json.JSONObject(incomingJson)
                     val currentStatus = jsonObject.getString("status")
                     val isCrying = jsonObject.optBoolean("is_crying", false)
                     val base64Image = jsonObject.optString("image", "")
 
-                    // Explicitly name the package so Android 14+ doesn't block the UI update!
+                    // Broadcast data including Baby IP for pairing persistence
                     val intent = Intent("BABYGUARD_NEW_DATA")
                     intent.setPackage(packageName)
                     intent.putExtra("payload", incomingJson)
+                    intent.putExtra("baby_ip", babyIp)
                     sendBroadcast(intent)
 
                     if (currentStatus.contains("DANGER") || currentStatus.contains("RISK") || isCrying) {
@@ -109,7 +111,11 @@ class BabyGuardService : Service() {
             .setOngoing(true)
             .build()
 
-        startForeground(1, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(1, notification)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

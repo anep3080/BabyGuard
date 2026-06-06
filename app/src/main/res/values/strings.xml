@@ -1,3 +1,52 @@
 <resources>
     <string name="app_name">BabyGuard</string>
+    <string name="scan_usb_camera">🔍 SCAN FOR USB CAMERA</string>
+    <string name="pairing_mode_active">Pairing Mode Active: Visible to Parent</string>
+    <string name="rotation_format">Rotation: %1$d°</string>
+    <string name="no_cameras_detected">No cameras detected. Check USB connection.</string>
+    <string name="select_camera">🔄 SELECT CAMERA</string>
+    <string name="start_pairing">📡 START PAIRING</string>
+    <string name="connected_to_parent">Connected to Parent Unit</string>
+    <string name="sleep_screen">Sleep Screen</string>
+    <string name="double_tap_to_wake">Double-tap to wake</string>
+
+    <!-- Pairing Screen -->
+    <string name="wifi_sync_requirement">NETWORK SYNCHRONIZATION: Both units must be connected to the same WiFi network.</string>
+    <string name="qr_generation_status">A valid QR code will be generated automatically once a network connection is detected.</string>
+    <string name="usb_camera_hint">Note: If your USB camera isn\'t listed, ensure it is UVC-compliant. Some devices may require an OTG adapter with external power supply.</string>
+    <string name="usb_diag_button">🛠️ USB DIAGNOSTICS</string>
+    <string name="method_lan">LAN (QR)</string>
+    <string name="method_direct">WiFi Direct</string>
+    <string name="qr_instruction">Show this QR to the Baby Unit.</string>
+    <string name="searching_baby_unit">Searching for Baby Unit...</string>
+    <string name="prev_connected_device">Previously Connected Device</string>
+    <string name="restore_connection">Restore Connection</string>
+
+    <!-- Dashboard -->
+    <string name="parent_monitor_title">Parent\'s Monitor</string>
+    <string name="system_initializing">System Initializing...</string>
+    <string name="live_insights">Live Insights</string>
+    <string name="insight_emotion">EMOTION</string>
+    <string name="insight_posture">POSTURE</string>
+    <string name="mood_calm">Calm</string>
+    <string name="posture_safe">Safe</string>
+    <string name="motion_sensitivity_label">Motion Sensitivity (MOG2)</string>
+    <string name="view_live_stream">📹 VIEW LIVE STREAM</string>
+    <string name="stop_live_stream">🛑 STOP VIDEO STREAM</string>
+    <string name="recent_activity">Recent Activity</string>
+
+    <!-- Remote Controls -->
+    <string name="remote_controls">Remote Controls</string>
+    <string name="btn_switch_camera">Switch Camera</string>
+    <string name="btn_rotate_view">Rotate View</string>
+    <string name="live_video_feed">LIVE VIDEO FEED</string>
+
+    <!-- Navigation Drawer -->
+    <string name="settings_tools">Settings &amp; Tools</string>
+    <string name="btn_reconnect">🔄 Reconnect Units</string>
+    <string name="btn_clear_log">🗑️ Clear Event Log</string>
+
+    <!-- Accessibility -->
+    <string name="desc_qr_code">Pairing QR Code</string>
+    <string name="desc_close_monitor">Close Video Monitor</string>
 </resources>
