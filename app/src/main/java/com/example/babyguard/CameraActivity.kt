@@ -78,6 +78,8 @@ class CameraActivity : AppCompatActivity() {
         })
         blackScreenOverlay.setOnTouchListener { _, event -> gestureDetector.onTouchEvent(event); true }
 
+        findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
+
         org.opencv.android.OpenCVLoader.initDebug()
         yoloDetector = YoloDetector(this); mediaPipeDetector = MediaPipeDetector(this); audioListener = AudioListener(this)
         motionDetector = MotionDetector(); qrScanner = QrScanner(); cameraExecutor = Executors.newSingleThreadExecutor()
