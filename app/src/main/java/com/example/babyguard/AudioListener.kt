@@ -91,4 +91,22 @@ class AudioListener(context: Context) {
         audioRecord?.stop()
         audioClassifier?.close()
     }
+
+    fun pauseListening() {
+        try {
+            audioRecord?.stop()
+            Log.i("BabyGuard_Audio", "Audio AI Paused.")
+        } catch (e: Exception) {
+            Log.e("BabyGuard_Audio", "Error pausing audio: ${e.message}")
+        }
+    }
+
+    fun resumeListening() {
+        try {
+            audioRecord?.startRecording()
+            Log.i("BabyGuard_Audio", "Audio AI Resumed.")
+        } catch (e: Exception) {
+            Log.e("BabyGuard_Audio", "Error resuming audio: ${e.message}")
+        }
+    }
 }

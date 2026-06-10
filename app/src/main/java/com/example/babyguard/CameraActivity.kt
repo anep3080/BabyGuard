@@ -45,6 +45,7 @@ class CameraActivity : AppCompatActivity() {
     private var lastYoloScanTime = 0L; private var lastScanTime = 0L; private var unseenFaceCount = 0
     private var lastVideoFrameTime = 0L; private var videoSocket: Socket? = null; private var videoOutputStream: DataOutputStream? = null
     var parentIpAddress: String? = null; var isPaired = false
+    private var isCurrentlyStreaming = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,6 +110,26 @@ class CameraActivity : AppCompatActivity() {
                             }
                         }
                     } else {
+                        val isStreaming = videoSocket != null && !videoSocket!!.isClosed
+                        if (isStreaming != isCurrentlyStreaming) {
+                            isCurrentlyStreaming = isStreaming
+                            if (isStreaming) {
+                                audioListener.pauseListening()
+                                runOnUiThread {
+                                    tvStatus.text = "📹 Streaming Active (AI Paused)"
+                                    tvStatus.setBackgroundResource(R.drawable.pill_background) // Keep the shape
+                                    tvStatus.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#00BCD4"))
+                                }
+                            } else {
+                                audioListener.resumeListening()
+                                runOnUiThread {
+                                    tvStatus.text = "🟢 AI Engine Active"
+                                    tvStatus.setBackgroundResource(R.drawable.pill_background)
+                                    tvStatus.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#E5B800"))
+                                }
+                            }
+                        }
+
                         if (currentTime - lastVideoFrameTime > 41) {
                             lastVideoFrameTime = currentTime
                             cameraExecutor.execute {
@@ -119,7 +140,7 @@ class CameraActivity : AppCompatActivity() {
                                 } catch (_: Exception) { videoSocket?.close(); videoSocket = null } // THE FIX: "_" replaces unused "e"
                             }
                         }
-                        if (currentTime - lastYoloScanTime > 333) {
+                        if (!isStreaming && currentTime - lastYoloScanTime > 333) {
                             lastYoloScanTime = currentTime
                             if (motionDetector.hasMotion(bitmap)) {
                                 val yoloResult = yoloDetector.detect(bitmap)
