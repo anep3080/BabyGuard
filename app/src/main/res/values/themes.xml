@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.BabyGuard" parent="Theme.MaterialComponents.Light.NoActionBar">
-        <item name="colorPrimary">#A9CFFF</item>
+        <item name="colorPrimary">#b4d7ff</item>
         <item name="colorPrimaryVariant">#82b6ff</item>
         <item name="colorOnPrimary">#333333</item>
-        <!-- Align Status Bar with the Parent Monitor background -->
-        <item name="android:statusBarColor">#FAF9F6</item>
+        <item name="android:statusBarColor">#fff8f0</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowBackground">#FAF9F6</item>
     </style>
 </resources>
