@@ -35,7 +35,7 @@ import java.util.Locale
 @SuppressLint("SetTextI18n")
 class ParentActivity : AppCompatActivity() {
     private lateinit var tvSubtitle: TextView
-    private lateinit var pairingLayout: NeumorphCardView
+    private lateinit var pairingLayout: View
     private lateinit var ivQrCode: ImageView
     private lateinit var dashboardLayout: LinearLayout
     private lateinit var svLiveVideo: SurfaceView
