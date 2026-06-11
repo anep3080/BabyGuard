@@ -11,19 +11,6 @@
         android:layout_height="match_parent"
         android:layout_marginBottom="250dp"/>
 
-    <ImageButton
-        android:id="@+id/btnBack"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="top|end"
-        android:layout_marginTop="48dp"
-        android:layout_marginEnd="16dp"
-        android:background="@drawable/pill_background"
-        android:backgroundTint="#80000000"
-        android:src="@android:drawable/ic_menu_revert"
-        app:tint="#FFFFFF"
-        android:elevation="8dp"/>
-
     <com.example.babyguard.OverlayView
         android:id="@+id/overlayView"
         android:layout_width="match_parent"
