@@ -35,7 +35,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|center_horizontal"
-        android:layout_marginTop="32dp"
+        android:layout_marginTop="100dp"
         android:background="@drawable/pill_background"
         android:backgroundTint="#E5B800"
         android:paddingStart="16dp"
@@ -46,6 +46,56 @@
         android:textColor="#FFFFFF"
         android:textSize="16sp"
         android:textStyle="bold" />
+
+    <!-- DIAGNOSTIC HUD -->
+    <LinearLayout
+        android:id="@+id/diagnosticHud"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:background="#88000000"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/tvHudBattery"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="🔋 --%"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/tvHudFps"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚡ 0 FPS"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textAlignment="center"/>
+
+        <TextView
+            android:id="@+id/tvHudMotion"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1.2"
+            android:text="🌀 MOG: 0"
+            android:textColor="#AAAAAA"
+            android:textSize="12sp"
+            android:textAlignment="center"/>
+
+        <TextView
+            android:id="@+id/tvHudStage"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="🎯 DORMANT"
+            android:textColor="#00FF00"
+            android:textSize="12sp"
+            android:textAlignment="viewEnd"/>
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"

@@ -57,11 +57,12 @@ class YoloDetector(context: Context) {
     }
 
     fun detect(bitmap: Bitmap): BoundingBox? {
-        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
-        val inputBuffer = convertBitmapToByteBuffer(resizedBitmap)
+        // ADAPTIVE SCALING: Run at 320x320 if throttling is active to save resources
+        val modelInputSize = if (org.tensorflow.lite.gpu.CompatibilityList().isDelegateSupportedOnThisDevice) 640 else 320
+        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, modelInputSize, modelInputSize, true)
+        val inputBuffer = convertBitmapToByteBuffer(resizedBitmap, modelInputSize)
 
         // YOLOv8n-Pose output is [1, 56, 8400]
-        // 56 = 4 (box) + 1 (conf) + 17 * 3 (keypoints: x, y, conf)
         val output = Array(1) { Array(56) { FloatArray(8400) } }
 
         interpreter?.run(inputBuffer, output)
@@ -78,6 +79,7 @@ class YoloDetector(context: Context) {
         }
 
         if (bestBoxIndex != -1) {
+            val scale = 640f / modelInputSize
             val cx = output[0][0][bestBoxIndex] * 640f
             val cy = output[0][1][bestBoxIndex] * 640f
             val w = output[0][2][bestBoxIndex] * 640f
@@ -138,11 +140,11 @@ class YoloDetector(context: Context) {
         }
     }
 
-    private fun convertBitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        val byteBuffer = ByteBuffer.allocateDirect(4 * 640 * 640 * 3)
+    private fun convertBitmapToByteBuffer(bitmap: Bitmap, size: Int): ByteBuffer {
+        val byteBuffer = ByteBuffer.allocateDirect(4 * size * size * 3)
         byteBuffer.order(ByteOrder.nativeOrder())
-        val intValues = IntArray(640 * 640)
-        bitmap.getPixels(intValues, 0, 640, 0, 0, 640, 640)
+        val intValues = IntArray(size * size)
+        bitmap.getPixels(intValues, 0, size, 0, 0, size, size)
         for (pixelValue in intValues) {
             byteBuffer.putFloat(((pixelValue shr 16) and 0xFF) / 255f)
             byteBuffer.putFloat(((pixelValue shr 8) and 0xFF) / 255f)

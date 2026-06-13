@@ -42,6 +42,10 @@ class ParentActivity : AppCompatActivity() {
     private lateinit var llAlertHistory: LinearLayout
     private lateinit var tvEmptyLog: TextView
     private lateinit var motionMeter: SeekBar
+    private lateinit var llBabyBattery: LinearLayout
+    private lateinit var pbBabyBattery: ProgressBar
+    private lateinit var tvBabyBatteryPct: TextView
+    private lateinit var fabMic: FloatingActionButton
 
     private lateinit var cardVideo: NeumorphCardView
     private lateinit var cardSettings: androidx.cardview.widget.CardView
@@ -68,6 +72,11 @@ class ParentActivity : AppCompatActivity() {
     private var activeVideoClient: Socket? = null
     private var videoServerThread: Thread? = null
 
+    private var isMicListening = false
+    private var audioServerThread: Thread? = null
+    private var audioServerSocket: ServerSocket? = null
+    private var audioClient: Socket? = null
+
     private val dataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val jsonString = intent?.getStringExtra("payload") ?: return
@@ -81,6 +90,14 @@ class ParentActivity : AppCompatActivity() {
                 val newMotion = jsonObject.optInt("motion_level", (10..90).random()).toFloat()
                 if (newMotion > currentMotionLevel) {
                     currentMotionLevel = newMotion // Jump to new peak
+                }
+
+                // Update Baby Battery (7.2)
+                val battery = jsonObject.optInt("battery", -1)
+                if (battery != -1) {
+                    llBabyBattery.visibility = View.VISIBLE
+                    pbBabyBattery.progress = battery
+                    tvBabyBatteryPct.text = " $battery%"
                 }
 
                 if (pairingLayout.visibility == View.VISIBLE) {
@@ -116,6 +133,10 @@ class ParentActivity : AppCompatActivity() {
         llAlertHistory = findViewById(R.id.llAlertHistory)
         tvEmptyLog = findViewById(R.id.tvEmptyLog)
         motionMeter = findViewById(R.id.motionMeter)
+        llBabyBattery = findViewById(R.id.llBabyBattery)
+        pbBabyBattery = findViewById(R.id.pbBabyBattery)
+        tvBabyBatteryPct = findViewById(R.id.tvBabyBatteryPct)
+        fabMic = findViewById(R.id.fabMic)
 
         cardVideo = findViewById(R.id.cardVideo)
         cardSettings = findViewById(R.id.cardSettings)
@@ -128,6 +149,10 @@ class ParentActivity : AppCompatActivity() {
         // FAB Actions
         findViewById<FloatingActionButton>(R.id.fabVideo).setOnClickListener { showCard(cardVideo, R.anim.slide_down); startVideoServer() }
         findViewById<FloatingActionButton>(R.id.fabSettings).setOnClickListener { showCard(cardSettings, R.anim.slide_in_right) }
+        
+        fabMic.setOnClickListener {
+            if (isMicListening) stopAudioListening() else startAudioListening()
+        }
 
         // Close Card Buttons
         findViewById<ImageButton>(R.id.btnCloseVideo).setOnClickListener { hideCard(cardVideo, R.anim.slide_out_up); stopVideoServer() }
@@ -276,6 +301,56 @@ class ParentActivity : AppCompatActivity() {
         try { activeVideoClient?.close() } catch (_: Exception) { }
         try { videoServerSocket?.close() } catch (_: Exception) { }
         activeVideoClient = null; videoServerSocket = null
+    }
+
+    private fun startAudioListening() {
+        if (isMicListening) return
+        isMicListening = true
+        fabMic.imageTintList = android.content.res.ColorStateList.valueOf(Color.RED)
+        
+        // Notify Baby Unit to start streaming audio (Simplified: Just start server)
+        audioServerThread = Thread {
+            try {
+                audioServerSocket = ServerSocket(8890).apply { reuseAddress = true }
+                while (isMicListening) {
+                    audioClient = audioServerSocket!!.accept()
+                    val dis = DataInputStream(audioClient!!.inputStream)
+                    
+                    val bufferSize = android.media.AudioTrack.getMinBufferSize(16000, 
+                        android.media.AudioFormat.CHANNEL_OUT_MONO, 
+                        android.media.AudioFormat.ENCODING_PCM_16BIT)
+                    
+                    val audioTrack = android.media.AudioTrack(
+                        android.media.AudioManager.STREAM_MUSIC,
+                        16000,
+                        android.media.AudioFormat.CHANNEL_OUT_MONO,
+                        android.media.AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize,
+                        android.media.AudioTrack.MODE_STREAM
+                    )
+                    
+                    audioTrack.play()
+                    val buffer = ShortArray(bufferSize)
+                    while (isMicListening && !audioClient!!.isClosed) {
+                        try {
+                            for (i in buffer.indices) buffer[i] = dis.readShort()
+                            audioTrack.write(buffer, 0, buffer.size)
+                        } catch (e: Exception) { break }
+                    }
+                    audioTrack.stop()
+                    audioTrack.release()
+                }
+            } catch (e: Exception) { Log.e("BabyGuard", "Audio Server Error", e) }
+        }
+        audioServerThread?.start()
+    }
+
+    private fun stopAudioListening() {
+        isMicListening = false
+        fabMic.imageTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#888888"))
+        try { audioClient?.close() } catch (_: Exception) {}
+        try { audioServerSocket?.close() } catch (_: Exception) {}
+        audioClient = null; audioServerSocket = null
     }
 
     @Suppress("DEPRECATION")

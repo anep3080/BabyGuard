@@ -2,10 +2,12 @@ package com.example.babyguard
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
@@ -32,6 +34,7 @@ import java.util.concurrent.Executors
 @SuppressLint("SetTextI18n") // Silences translation warnings
 class CameraActivity : AppCompatActivity() {
     private lateinit var aiGovernor: AIGovernor
+    private lateinit var safetyPipeline: SafetyPipeline
     private lateinit var yoloDetector: YoloDetector
     private lateinit var emotionDetector: EmotionDetector
     private lateinit var mediaPipeDetector: MediaPipeDetector
@@ -41,6 +44,10 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var viewFinder: PreviewView
     private lateinit var overlayView: OverlayView
     private lateinit var tvStatus: TextView
+    private lateinit var tvHudBattery: TextView
+    private lateinit var tvHudFps: TextView
+    private lateinit var tvHudMotion: TextView
+    private lateinit var tvHudStage: TextView
     private lateinit var blackScreenOverlay: FrameLayout
     private lateinit var cameraExecutor: ExecutorService
 
@@ -57,6 +64,18 @@ class CameraActivity : AppCompatActivity() {
     private var currentDetectedMood = "Sleeping"
     private var currentDetectedPosture = "Safe"
     private var currentStatus = "🟢 Monitoring"
+    
+    private var frameCount = 0
+    private var lastFpsCheckTime = 0L
+    private var currentFps = 0
+    private var isAudioStreamingRequested = false
+    private var audioStreamingSocket: Socket? = null
+    private var audioStreamingOutputStream: java.io.DataOutputStream? = null
+    private var audioRecord: android.media.AudioRecord? = null
+    private var isAudioStreaming = false
+
+    private val batteryManager by lazy { getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager }
+    private fun getBatteryPercentage(): Int = batteryManager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +85,10 @@ class CameraActivity : AppCompatActivity() {
         viewFinder = findViewById(R.id.viewFinder)
         overlayView = findViewById(R.id.overlayView)
         tvStatus = findViewById(R.id.tvStatus)
+        tvHudBattery = findViewById(R.id.tvHudBattery)
+        tvHudFps = findViewById(R.id.tvHudFps)
+        tvHudMotion = findViewById(R.id.tvHudMotion)
+        tvHudStage = findViewById(R.id.tvHudStage)
         blackScreenOverlay = findViewById(R.id.blackScreenOverlay)
         val switchSleepMode = findViewById<SwitchCompat>(R.id.switchSleepMode)
         val ivBurnInShield = findViewById<android.widget.ImageView>(R.id.ivBurnInShield)
@@ -104,6 +127,7 @@ class CameraActivity : AppCompatActivity() {
         aiGovernor = AIGovernor(this)
         yoloDetector = YoloDetector(this); emotionDetector = EmotionDetector(this); mediaPipeDetector = MediaPipeDetector(this); audioListener = AudioListener(this)
         motionDetector = MotionDetector(); qrScanner = QrScanner(); cameraExecutor = Executors.newSingleThreadExecutor()
+        safetyPipeline = SafetyPipeline(motionDetector, yoloDetector, emotionDetector, aiGovernor)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO), 1001)
@@ -135,9 +159,11 @@ class CameraActivity : AppCompatActivity() {
                     } else {
                         val isStreaming = videoSocket != null && !videoSocket!!.isClosed
                         
-                        // Handle Telemetry Heartbeat (6.1)
+                        // Handle Telemetry Heartbeat (6.1 + 7.1)
                         if (currentTime - lastTelemetryTime > 1000) {
                             lastTelemetryTime = currentTime
+                            val batteryPct = getBatteryPercentage()
+                            
                             val telemetryJson = org.json.JSONObject().apply {
                                 put("status", currentStatus)
                                 put("mood", currentDetectedMood)
@@ -145,10 +171,29 @@ class CameraActivity : AppCompatActivity() {
                                 put("motion_level", currentMotionIntensity)
                                 put("is_crying", audioListener.isBabyCrying())
                                 put("temp", aiGovernor.getCurrentTemperature())
+                                put("battery", batteryPct)
+                                put("fps", currentFps)
                             }.toString()
+
+                            runOnUiThread {
+                                tvHudBattery.text = "🔋 $batteryPct%"
+                                tvHudFps.text = "⚡ $currentFps FPS"
+                                tvHudMotion.text = "🌀 MOG: $currentMotionIntensity"
+                                tvHudStage.text = if (safetyPipeline.getState() == SafetyPipeline.State.ACTIVE) "🎯 ACTIVE" else "🎯 DORMANT"
+                                tvHudStage.setTextColor(if (safetyPipeline.getState() == SafetyPipeline.State.ACTIVE) Color.RED else Color.GREEN)
+                            }
+
                             if (isPaired) {
                                 AlertClient(parentIpAddress!!, 8888, telemetryJson).start()
                             }
+                        }
+
+                        // FPS Calculation
+                        frameCount++
+                        if (currentTime - lastFpsCheckTime > 1000) {
+                            currentFps = frameCount
+                            frameCount = 0
+                            lastFpsCheckTime = currentTime
                         }
 
                         if (isStreaming != isCurrentlyStreaming) {
@@ -183,71 +228,60 @@ class CameraActivity : AppCompatActivity() {
                                     videoOutputStream?.writeInt(bytes.size); videoOutputStream?.write(bytes); videoOutputStream?.flush()
                                 } catch (_: Exception) { videoSocket?.close(); videoSocket = null } 
                             }
+                            
+                            // Audio Streaming (7.3)
+                            if (isPaired && (audioStreamingSocket == null || audioStreamingSocket!!.isClosed)) {
+                                cameraExecutor.execute {
+                                    try {
+                                        audioStreamingSocket = Socket(parentIpAddress, 8890)
+                                        audioStreamingOutputStream = java.io.DataOutputStream(audioStreamingSocket!!.getOutputStream())
+                                        startAudioStreaming()
+                                    } catch (_: Exception) { audioStreamingSocket?.close(); audioStreamingSocket = null }
+                                }
+                            }
                         }
 
-                        // 5.1 & 5.3: AI Vision Throttling and Pause
+                        // 5.1 & 5.3: AI Vision Pipeline (Refactored)
                         val aiDelay = aiGovernor.getRequiredDelay()
                         if (!isStreaming && currentTime - lastYoloScanTime > aiDelay) {
                             lastYoloScanTime = currentTime
-                            val hasMotion = motionDetector.hasMotion(bitmap)
-                            currentMotionIntensity = if (hasMotion) (40..100).random() else (0..10).random()
                             
-                            if (hasMotion) {
-                                val yoloResult = yoloDetector.detect(bitmap)
-                                if (yoloResult != null) {
-                                    // Tier 3: Emotion Analysis
-                                    val faceCrop = yoloDetector.getFaceCrop(bitmap, yoloResult.keypoints)
-                                    currentDetectedMood = if (faceCrop != null) {
-                                        emotionDetector.detectMood(faceCrop)
-                                    } else if (yoloResult.isProne) {
-                                        "Hidden"
-                                    } else {
-                                        "Sleeping"
-                                    }
+                            val result = safetyPipeline.processFrame(bitmap)
+                            currentMotionIntensity = result.motionPixels
+                            currentDetectedMood = result.mood
+                            currentDetectedPosture = result.posture
+                            currentStatus = result.status
 
-                                    runOnUiThread {
-                                        // 3.4 Danger Timer Logic
-                                        var status = if (yoloResult.isStanding) "🚨 DANGER (Baby Standing!)" else "🟢 Baby is Awake"
-                                        currentDetectedPosture = if (yoloResult.isStanding) "Standing" else if (yoloResult.isProne) "Face Down" else "Safe"
-                                        
-                                        if (yoloResult.isProne) {
-                                            if (proneRiskStartTime == 0L) proneRiskStartTime = currentTime
-                                            val elapsed = (currentTime - proneRiskStartTime) / 1000
-                                            status = "⚠️ PRONE RISK ($elapsed s)"
-                                            
-                                            if (elapsed >= 10 && !isAlertEscalated) {
-                                                status = "🚨 CRITICAL: FACE DOWN!"
-                                                isAlertEscalated = true
-                                            }
-                                        } else {
-                                            proneRiskStartTime = 0L
-                                            isAlertEscalated = false
-                                        }
-
-                                        currentStatus = status
-                                        tvStatus.text = status
-
-                                        if (status.contains("DANGER") || status.contains("CRITICAL")) {
-                                            val stream = java.io.ByteArrayOutputStream()
-                                            bitmap.compress(Bitmap.CompressFormat.JPEG, 40, stream)
-                                            val base64Image = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
-                                            val alertJson = org.json.JSONObject().apply { 
-                                                put("status", status)
-                                                put("mood", currentDetectedMood)
-                                                put("posture", currentDetectedPosture)
-                                                put("is_crying", false)
-                                                put("image", base64Image) 
-                                            }.toString()
-                                            AlertClient(parentIpAddress!!, 8888, alertJson).start()
-                                        }
-                                    }
-                                } else {
-                                    currentDetectedMood = "Searching..."
-                                    currentDetectedPosture = "None"
+                            // Handle SIDS Escalation Logic within Activity for simplicity
+                            if (result.isProne) {
+                                if (proneRiskStartTime == 0L) proneRiskStartTime = currentTime
+                                val elapsed = (currentTime - proneRiskStartTime) / 1000
+                                currentStatus = "⚠️ PRONE RISK ($elapsed s)"
+                                if (elapsed >= 10 && !isAlertEscalated) {
+                                    currentStatus = "🚨 CRITICAL: FACE DOWN!"
+                                    isAlertEscalated = true
                                 }
                             } else {
-                                currentDetectedMood = "Sleeping"
-                                currentDetectedPosture = "Safe"
+                                proneRiskStartTime = 0L
+                                isAlertEscalated = false
+                            }
+
+                            runOnUiThread {
+                                overlayView.setResults(result)
+                                tvStatus.text = currentStatus
+                                if (currentStatus.contains("DANGER") || currentStatus.contains("CRITICAL")) {
+                                    val stream = java.io.ByteArrayOutputStream()
+                                    bitmap.compress(Bitmap.CompressFormat.JPEG, 40, stream)
+                                    val base64Image = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                                    val alertJson = org.json.JSONObject().apply { 
+                                        put("status", currentStatus)
+                                        put("mood", currentDetectedMood)
+                                        put("posture", currentDetectedPosture)
+                                        put("is_crying", false)
+                                        put("image", base64Image) 
+                                    }.toString()
+                                    AlertClient(parentIpAddress!!, 8888, alertJson).start()
+                                }
                             }
                         }
                     }
@@ -257,5 +291,51 @@ class CameraActivity : AppCompatActivity() {
             cameraProvider.unbindAll()
             cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalyzer)
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startAudioStreaming() {
+        if (isAudioStreaming) return
+        isAudioStreaming = true
+        
+        Thread {
+            try {
+                val bufferSize = android.media.AudioRecord.getMinBufferSize(16000, 
+                    android.media.AudioFormat.CHANNEL_IN_MONO, 
+                    android.media.AudioFormat.ENCODING_PCM_16BIT)
+                
+                audioRecord = android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.MIC,
+                    16000,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+                
+                audioRecord?.startRecording()
+                val buffer = ShortArray(bufferSize)
+                
+                while (isAudioStreaming && audioStreamingSocket != null && !audioStreamingSocket!!.isClosed) {
+                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                    if (read > 0) {
+                        for (i in 0 until read) audioStreamingOutputStream?.writeShort(buffer[i].toInt())
+                        audioStreamingOutputStream?.flush()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("BabyGuard", "Audio Streaming Error", e)
+            } finally {
+                stopAudioStreaming()
+            }
+        }.start()
+    }
+
+    private fun stopAudioStreaming() {
+        isAudioStreaming = false
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        audioRecord = null
+        try { audioStreamingSocket?.close() } catch (_: Exception) {}
+        audioStreamingSocket = null
     }
 }

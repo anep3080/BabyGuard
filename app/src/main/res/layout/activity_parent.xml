@@ -40,6 +40,36 @@
                     android:text="Connected Securely"
                     android:textSize="14sp"
                     android:textColor="#888888"/>
+
+                <LinearLayout
+                    android:id="@+id/llBabyBattery"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:visibility="gone">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Baby Battery: "
+                        android:textSize="12sp"
+                        android:textColor="#AAAAAA"/>
+                    <ProgressBar
+                        android:id="@+id/pbBabyBattery"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="40dp"
+                        android:layout_height="8dp"
+                        android:progress="50"
+                        android:progressTint="#4CAF50"
+                        android:progressBackgroundTint="#DDDDDD"/>
+                    <TextView
+                        android:id="@+id/tvBabyBatteryPct"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text=" 50%"
+                        android:textSize="10sp"
+                        android:textColor="#AAAAAA"/>
+                </LinearLayout>
             </LinearLayout>
 
             <!-- BACK BUTTON WITH NO SHADOW -->
@@ -247,8 +277,8 @@
 
         <!-- FLOATING ACTION BUTTONS -->
         <LinearLayout
-            android:layout_width="147dp"
-            android:layout_height="86dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
             android:layout_marginBottom="32dp"
             android:orientation="horizontal">
@@ -262,6 +292,16 @@
                 app:backgroundTint="#FFFFFF"
                 app:elevation="8dp"
                 app:tint="#f00090" />
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/fabMic"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="8dp"
+                android:src="@android:drawable/ic_btn_speak_now"
+                app:backgroundTint="#FFFFFF"
+                app:elevation="8dp"
+                app:tint="#888888" />
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/fabSettings"

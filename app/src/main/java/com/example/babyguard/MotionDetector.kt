@@ -15,27 +15,38 @@ class MotionDetector {
     private val fgMask = Mat()
 
     fun hasMotion(bitmap: Bitmap): Boolean {
+        return getMotionPixelCount(bitmap) > 2500
+    }
+
+    fun getMotionPixelCount(bitmap: Bitmap): Int {
         try {
             Utils.bitmapToMat(bitmap, matFrame)
             
+            // GRID-ROI: Focus on center 70% to ignore background movement
+            val roi = org.opencv.core.Rect(
+                (matFrame.cols() * 0.15).toInt(),
+                (matFrame.rows() * 0.15).toInt(),
+                (matFrame.cols() * 0.70).toInt(),
+                (matFrame.rows() * 0.70).toInt()
+            )
+            val matRoi = matFrame.submat(roi)
+
             // 2.1 RED-CHANNEL OPTIMIZATION: Extract red channel (Index 0 in RGB/RGBA Mat)
-            // This reduces pixel data processing by 66% and works best with nightlights
             val channels = mutableListOf<Mat>()
-            Core.split(matFrame, channels)
+            Core.split(matRoi, channels)
+            
             if (channels.isNotEmpty()) {
                 mog2.apply(channels[0], fgMask)
                 for (m in channels) m.release() // Free memory
             } else {
-                mog2.apply(matFrame, fgMask)
+                mog2.apply(matRoi, fgMask)
             }
+            matRoi.release()
 
-            val movingPixels = Core.countNonZero(fgMask)
-            val motionThreshold = 3000 // Tweak this if it's too sensitive!
-
-            return movingPixels > motionThreshold
+            return Core.countNonZero(fgMask)
         } catch (e: Exception) {
             Log.e("BabyGuard_MOG2", "Motion detection failed: ${e.message}")
-            return false
+            return 0
         }
     }
 
