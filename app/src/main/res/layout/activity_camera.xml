@@ -94,6 +94,22 @@
         android:visibility="gone"
         android:clickable="true"
         android:focusable="true">
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:text="Double-tap to wake screen" android:textColor="#444444" android:textSize="16sp" />
+
+        <ImageView
+            android:id="@+id/ivBurnInShield"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_gravity="center"
+            android:src="@android:drawable/ic_lock_idle_lock"
+            app:tint="#22FFFFFF" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="100dp"
+            android:text="Double-tap to wake screen"
+            android:textColor="#333333"
+            android:textSize="14sp" />
     </FrameLayout>
 </FrameLayout>

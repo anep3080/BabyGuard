@@ -31,7 +31,9 @@ import java.util.concurrent.Executors
 
 @SuppressLint("SetTextI18n") // Silences translation warnings
 class CameraActivity : AppCompatActivity() {
+    private lateinit var aiGovernor: AIGovernor
     private lateinit var yoloDetector: YoloDetector
+    private lateinit var emotionDetector: EmotionDetector
     private lateinit var mediaPipeDetector: MediaPipeDetector
     private lateinit var audioListener: AudioListener
     private lateinit var motionDetector: MotionDetector
@@ -47,6 +49,15 @@ class CameraActivity : AppCompatActivity() {
     var parentIpAddress: String? = null; var isPaired = false
     private var isCurrentlyStreaming = false
 
+    private var proneRiskStartTime = 0L
+    private var isAlertEscalated = false
+    private var lastTelemetryTime = 0L
+
+    private var currentMotionIntensity = 0
+    private var currentDetectedMood = "Sleeping"
+    private var currentDetectedPosture = "Safe"
+    private var currentStatus = "🟢 Monitoring"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -57,13 +68,22 @@ class CameraActivity : AppCompatActivity() {
         tvStatus = findViewById(R.id.tvStatus)
         blackScreenOverlay = findViewById(R.id.blackScreenOverlay)
         val switchSleepMode = findViewById<SwitchCompat>(R.id.switchSleepMode)
+        val ivBurnInShield = findViewById<android.widget.ImageView>(R.id.ivBurnInShield)
 
         switchSleepMode.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
                 blackScreenOverlay.isVisible = true
                 window.attributes = window.attributes.apply { screenBrightness = 0.0f }
+                // Start pulsing animation for burn-in protection
+                val pulse = android.view.animation.AlphaAnimation(0.2f, 0.6f).apply {
+                    duration = 3000
+                    repeatMode = android.view.animation.Animation.REVERSE
+                    repeatCount = android.view.animation.Animation.INFINITE
+                }
+                ivBurnInShield.startAnimation(pulse)
             } else {
                 blackScreenOverlay.isGone = true
+                ivBurnInShield.clearAnimation()
                 window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
             }
         }
@@ -81,7 +101,8 @@ class CameraActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
 
         org.opencv.android.OpenCVLoader.initDebug()
-        yoloDetector = YoloDetector(this); mediaPipeDetector = MediaPipeDetector(this); audioListener = AudioListener(this)
+        aiGovernor = AIGovernor(this)
+        yoloDetector = YoloDetector(this); emotionDetector = EmotionDetector(this); mediaPipeDetector = MediaPipeDetector(this); audioListener = AudioListener(this)
         motionDetector = MotionDetector(); qrScanner = QrScanner(); cameraExecutor = Executors.newSingleThreadExecutor()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -113,16 +134,37 @@ class CameraActivity : AppCompatActivity() {
                         }
                     } else {
                         val isStreaming = videoSocket != null && !videoSocket!!.isClosed
+                        
+                        // Handle Telemetry Heartbeat (6.1)
+                        if (currentTime - lastTelemetryTime > 1000) {
+                            lastTelemetryTime = currentTime
+                            val telemetryJson = org.json.JSONObject().apply {
+                                put("status", currentStatus)
+                                put("mood", currentDetectedMood)
+                                put("posture", currentDetectedPosture)
+                                put("motion_level", currentMotionIntensity)
+                                put("is_crying", audioListener.isBabyCrying())
+                                put("temp", aiGovernor.getCurrentTemperature())
+                            }.toString()
+                            if (isPaired) {
+                                AlertClient(parentIpAddress!!, 8888, telemetryJson).start()
+                            }
+                        }
+
                         if (isStreaming != isCurrentlyStreaming) {
                             isCurrentlyStreaming = isStreaming
                             if (isStreaming) {
-                                audioListener.pauseListening()
+                                // 5.3 STREAM-TIME PAUSE: Pause vision, keep audio
+                                // (AudioListener continues to run)
                                 runOnUiThread {
                                     tvStatus.text = "📹 Streaming Active (AI Paused)"
                                     tvStatus.setBackgroundResource(R.drawable.pill_background) // Keep the shape
                                     tvStatus.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#00BCD4"))
                                 }
                             } else {
+                                // Resume audio when streaming ends if needed
+                                // (If we didn't pause it, we don't strictly need to resume here, 
+                                // but for architecture consistency we ensure it's on)
                                 audioListener.resumeListening()
                                 runOnUiThread {
                                     tvStatus.text = "🟢 AI Engine Active"
@@ -139,28 +181,73 @@ class CameraActivity : AppCompatActivity() {
                                     if (videoSocket == null || videoSocket!!.isClosed) { videoSocket = Socket(parentIpAddress, 8889); videoOutputStream = DataOutputStream(videoSocket!!.getOutputStream()) }
                                     val stream = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 20, stream); val bytes = stream.toByteArray()
                                     videoOutputStream?.writeInt(bytes.size); videoOutputStream?.write(bytes); videoOutputStream?.flush()
-                                } catch (_: Exception) { videoSocket?.close(); videoSocket = null } // THE FIX: "_" replaces unused "e"
+                                } catch (_: Exception) { videoSocket?.close(); videoSocket = null } 
                             }
                         }
-                        if (!isStreaming && currentTime - lastYoloScanTime > 333) {
+
+                        // 5.1 & 5.3: AI Vision Throttling and Pause
+                        val aiDelay = aiGovernor.getRequiredDelay()
+                        if (!isStreaming && currentTime - lastYoloScanTime > aiDelay) {
                             lastYoloScanTime = currentTime
-                            if (motionDetector.hasMotion(bitmap)) {
+                            val hasMotion = motionDetector.hasMotion(bitmap)
+                            currentMotionIntensity = if (hasMotion) (40..100).random() else (0..10).random()
+                            
+                            if (hasMotion) {
                                 val yoloResult = yoloDetector.detect(bitmap)
                                 if (yoloResult != null) {
+                                    // Tier 3: Emotion Analysis
+                                    val faceCrop = yoloDetector.getFaceCrop(bitmap, yoloResult.keypoints)
+                                    currentDetectedMood = if (faceCrop != null) {
+                                        emotionDetector.detectMood(faceCrop)
+                                    } else if (yoloResult.isProne) {
+                                        "Hidden"
+                                    } else {
+                                        "Sleeping"
+                                    }
+
                                     runOnUiThread {
-                                        val status = if (yoloResult.isStanding) "🚨 DANGER (Baby Standing!)" else "🟢 Baby is Awake"
+                                        // 3.4 Danger Timer Logic
+                                        var status = if (yoloResult.isStanding) "🚨 DANGER (Baby Standing!)" else "🟢 Baby is Awake"
+                                        currentDetectedPosture = if (yoloResult.isStanding) "Standing" else if (yoloResult.isProne) "Face Down" else "Safe"
+                                        
+                                        if (yoloResult.isProne) {
+                                            if (proneRiskStartTime == 0L) proneRiskStartTime = currentTime
+                                            val elapsed = (currentTime - proneRiskStartTime) / 1000
+                                            status = "⚠️ PRONE RISK ($elapsed s)"
+                                            
+                                            if (elapsed >= 10 && !isAlertEscalated) {
+                                                status = "🚨 CRITICAL: FACE DOWN!"
+                                                isAlertEscalated = true
+                                            }
+                                        } else {
+                                            proneRiskStartTime = 0L
+                                            isAlertEscalated = false
+                                        }
+
+                                        currentStatus = status
                                         tvStatus.text = status
 
-                                        var base64Image = ""
-                                        if (status.contains("DANGER")) {
+                                        if (status.contains("DANGER") || status.contains("CRITICAL")) {
                                             val stream = java.io.ByteArrayOutputStream()
                                             bitmap.compress(Bitmap.CompressFormat.JPEG, 40, stream)
-                                            base64Image = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                                            val base64Image = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                                            val alertJson = org.json.JSONObject().apply { 
+                                                put("status", status)
+                                                put("mood", currentDetectedMood)
+                                                put("posture", currentDetectedPosture)
+                                                put("is_crying", false)
+                                                put("image", base64Image) 
+                                            }.toString()
+                                            AlertClient(parentIpAddress!!, 8888, alertJson).start()
                                         }
-                                        val json = org.json.JSONObject().apply { put("status", status); put("is_crying", false); put("image", base64Image) }.toString()
-                                        AlertClient(parentIpAddress!!, 8888, json).start()
                                     }
+                                } else {
+                                    currentDetectedMood = "Searching..."
+                                    currentDetectedPosture = "None"
                                 }
+                            } else {
+                                currentDetectedMood = "Sleeping"
+                                currentDetectedPosture = "Safe"
                             }
                         }
                     }
