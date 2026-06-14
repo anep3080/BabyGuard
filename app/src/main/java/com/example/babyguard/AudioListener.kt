@@ -11,85 +11,182 @@ import com.google.mediapipe.tasks.audio.audioclassifier.AudioClassifier.AudioCla
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.components.containers.AudioData
 
-class AudioListener(context: Context) {
+/**
+ * Single-AudioRecord audio engine.
+ *
+ * PROBLEM with the old design: two AudioRecord instances (mainAudioRecord for YAMNet,
+ * meterAudioRecord for amplitude) plus a THIRD in CameraActivity.startAudioStreaming()
+ * all tried to capture from MIC simultaneously. Android only allows one active capture
+ * at a time — the others fail silently, so the meter always showed 0 and the classifier
+ * never ran.
+ *
+ * FIX: one AudioRecord, one background thread, three consumers:
+ *  1. RMS amplitude   → [lastAmplitude]  read on any thread
+ *  2. YAMNet window   → [isCryingDetected] updated every 1 s
+ *  3. Streaming       → [onAudioChunk] callback (CameraActivity sets this instead of
+ *                        creating its own AudioRecord)
+ */
+class AudioListener(private val context: Context) {
+
+    companion object {
+        const val SAMPLE_RATE  = 16_000
+        const val CLASSIFY_WIN = 16_000   // 1-second window for YAMNet
+        private const val TAG  = "BabyGuard_Audio"
+    }
+
+    // ── Shared state (volatile — written by processing thread, read on UI/main) ──
+    @Volatile var lastAmplitude: Int = 0
+        private set
+    @Volatile var isCryingDetected: Boolean = false
+        private set
+
+    /** Called with (chunk, samplesRead) for every audio chunk.
+     *  CameraActivity sets this instead of owning its own AudioRecord. */
+    @Volatile var onAudioChunk: ((ShortArray, Int) -> Unit)? = null
+
+    // ── Sensitivity gate (0–100 scale, audio alert fires when amplitude > gate) ──
+    @Volatile var alertSensitivity: Int = 40   // default: alert when amplitude > 40 %
 
     private var audioClassifier: AudioClassifier? = null
-    private var mainAudioRecord: AudioRecord? = null
-    private var meterAudioRecord: AudioRecord? = null
-    private var audioData: AudioData? = null
-    private var lastAmplitude = 0
+    @Volatile private var isRunning = false
+    private var processingThread: Thread? = null
 
+    // ── Init classifier (no AudioRecord created here) ─────────────────────────
     init {
         try {
-            val baseOptions = BaseOptions.builder().setModelAssetPath("yamnet.tflite").build()
-            val options = AudioClassifierOptions.builder().setBaseOptions(baseOptions).setMaxResults(3).build()
-            audioClassifier = AudioClassifier.createFromOptions(context, options)
-            
-            // MediaPipe Record (for AI)
-            mainAudioRecord = audioClassifier?.createAudioRecord()
-
-            // Dedicated Meter Record (to prevent data race)
-            val bufferSize = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            meterAudioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize)
-
-            val audioFormat = AudioData.AudioDataFormat.builder().setNumOfChannels(1).setSampleRate(16000.0f).build()
-            audioData = AudioData.create(audioFormat, 16000)
-            
-            Log.i("BabyGuard_Audio", "Audio Engine Init Successful")
+            val opts = AudioClassifierOptions.builder()
+                .setBaseOptions(BaseOptions.builder().setModelAssetPath("yamnet.tflite").build())
+                .setMaxResults(3).build()
+            audioClassifier = AudioClassifier.createFromOptions(context, opts)
+            Log.i(TAG, "YAMNet classifier initialized")
         } catch (e: Exception) {
-            Log.e("BabyGuard_Audio", "Error init Audio: ${e.message}")
+            Log.e(TAG, "Classifier init failed: ${e.message}")
         }
     }
 
+    // ── Public API ─────────────────────────────────────────────────────────────
+
+    @SuppressLint("MissingPermission")
     fun startListening() {
-        try {
-            mainAudioRecord?.startRecording()
-            meterAudioRecord?.startRecording()
-        } catch (e: Exception) {
-            Log.e("BabyGuard_Audio", "Failed to start mic: ${e.message}")
-        }
-    }
+        if (isRunning) return
+        isRunning = true
 
-    fun isBabyCrying(): Boolean {
-        if (audioClassifier == null || mainAudioRecord == null || audioData == null) return false
-        try {
-            // Update Volume Meter (Using dedicated record)
-            val buffer = ShortArray(1024)
-            val read = meterAudioRecord?.read(buffer, 0, buffer.size) ?: 0
-            if (read > 0) {
-                var max = 0
-                for (i in 0 until read) {
-                    val abs = Math.abs(buffer[i].toInt())
-                    if (abs > max) max = abs
+        processingThread = Thread {
+            val minBuf = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            // Keep at least 200 ms in the hardware buffer to avoid overruns on slow devices
+            val bufSize = maxOf(minBuf, 3_200)
+
+            val record = try {
+                AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize * 2
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "AudioRecord create failed: ${e.message}")
+                isRunning = false
+                return@Thread
+            }
+
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecord not initialized (no MIC permission?)")
+                record.release(); isRunning = false; return@Thread
+            }
+
+            record.startRecording()
+            Log.i(TAG, "AudioRecord started — buffer $bufSize samples")
+
+            // Chunk size: ~100 ms of audio
+            val chunkSize = SAMPLE_RATE / 10
+            val chunk     = ShortArray(chunkSize)
+
+            // 1-second accumulator for YAMNet
+            val classifyBuf = ShortArray(CLASSIFY_WIN)
+            var classifyPos = 0
+
+            while (isRunning) {
+                val read = record.read(chunk, 0, chunkSize)
+                if (read <= 0) continue
+
+                // ── 1. RMS amplitude (log-scale 0-100) ───────────────────────
+                var sumSq = 0.0
+                for (i in 0 until read) sumSq += chunk[i] * chunk[i].toDouble()
+                val rms = Math.sqrt(sumSq / read)
+                // Log scale: quiet room (~50 RMS) → 0%
+                //            normal voice (~500 RMS) → 36%
+                //            baby cry (~5 000 RMS) → 78%
+                //            peak (32 768 RMS) → 100%
+                // The old linear scale (rms/327.68) made quiet sounds invisible —
+                // a normal room at RMS 300 would only show 0.9% → rounds to 0.
+                lastAmplitude = if (rms < 50.0) 0
+                    else ((Math.log10(rms) - 1.70) / 2.82 * 100).toInt().coerceIn(0, 100)
+
+                // ── 2. Forward to streaming callback ────────────────────────
+                onAudioChunk?.invoke(chunk, read)
+
+                // ── 3. Accumulate for YAMNet (1-second window) ──────────────
+                var src = 0
+                while (src < read && classifyPos < CLASSIFY_WIN) {
+                    classifyBuf[classifyPos++] = chunk[src++]
                 }
-                lastAmplitude = (max * 100 / 16384).coerceAtMost(100)
+                if (classifyPos >= CLASSIFY_WIN) {
+                    runClassifier(classifyBuf.copyOf())
+                    classifyPos = 0
+                }
             }
 
-            // Run AI (Using main record)
-            audioData?.load(mainAudioRecord!!)
-            val result = audioClassifier?.classify(audioData!!)
-            val categories = result?.classificationResults()?.firstOrNull()?.classifications()?.firstOrNull()?.categories() ?: emptyList()
-            for (category in categories) {
-                if (category.categoryName().contains("cry", ignoreCase = true) && category.score() > 0.40f) return true
-            }
-        } catch (e: Exception) {
-            Log.e("BabyGuard_Audio", "Audio processing error: ${e.message}")
+            record.stop()
+            record.release()
+            Log.i(TAG, "AudioRecord stopped")
         }
-        return false
+        processingThread?.isDaemon = true
+        processingThread?.start()
     }
-
-    fun getLatestAmplitude(): Int = lastAmplitude
 
     fun stopListening() {
-        try { mainAudioRecord?.stop(); meterAudioRecord?.stop() } catch (_: Exception) {}
+        isRunning = false
+        onAudioChunk = null
+        try { processingThread?.join(2000) } catch (_: InterruptedException) {}
         audioClassifier?.close()
+        audioClassifier = null
     }
 
-    fun pauseListening() {
-        try { mainAudioRecord?.stop(); meterAudioRecord?.stop() } catch (_: Exception) {}
-    }
+    /** Pause without tearing down the thread (used when streaming takes over). */
+    fun pauseListening()  { /* no-op: CameraActivity controls streaming via callback */ }
+    fun resumeListening() { if (!isRunning) startListening() }
 
-    fun resumeListening() {
-        try { mainAudioRecord?.startRecording(); meterAudioRecord?.startRecording() } catch (_: Exception) {}
+    /** Caller convenience (matches old API) */
+    fun isBabyCrying()       = isCryingDetected
+    fun getLatestAmplitude() = lastAmplitude
+
+    // ── Private ────────────────────────────────────────────────────────────────
+
+    private fun runClassifier(samples: ShortArray) {
+        val classifier = audioClassifier ?: return
+        try {
+            val format = AudioData.AudioDataFormat.builder()
+                .setNumOfChannels(1)
+                .setSampleRate(SAMPLE_RATE.toFloat())
+                .build()
+            val ad = AudioData.create(format, samples.size)
+
+            // AudioData.load() has ShortArray and FloatArray overloads — use ShortArray directly.
+            ad.load(samples, 0, samples.size)
+
+            val result = classifier.classify(ad)
+            isCryingDetected = result.classificationResults()
+                ?.firstOrNull()
+                ?.classifications()?.firstOrNull()?.categories()
+                ?.any { it.categoryName().contains("cry", ignoreCase = true) && it.score() > 0.40f }
+                ?: false
+        } catch (e: Exception) {
+            Log.e(TAG, "Classifier error: ${e.message}")
+        }
     }
 }

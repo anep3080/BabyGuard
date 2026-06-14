@@ -64,11 +64,14 @@ class ParentActivity : AppCompatActivity() {
     private lateinit var tvInsightPosture: TextView
 
     private lateinit var switchMasterAlert: SwitchCompat
+    private lateinit var switchMasterAlertQuick: SwitchCompat   // in live insights card
     private lateinit var switchMediumAlert: SwitchCompat
     private lateinit var switchLowAlert: SwitchCompat
     private lateinit var switchQuietHours: SwitchCompat
     private lateinit var tvQuietStart: TextView
     private lateinit var tvQuietEnd: TextView
+    private lateinit var seekAudioSens: SeekBar
+    private lateinit var tvAudioSensLabel: TextView
 
     private lateinit var alertOverlay: FrameLayout
     private lateinit var tvAlertMessage: TextView
@@ -78,6 +81,12 @@ class ParentActivity : AppCompatActivity() {
     private lateinit var prefs: AppPreferences
     private lateinit var dbHelper: AlertDatabaseHelper
     private val recorder by lazy { VideoRecorder(this) }
+
+    // ── Log deduplication ─────────────────────────────────────────────────────
+    // Tracks (tier-action → last log timestamp) so repeated identical events
+    // don't spam the history card.
+    private val lastLoggedAt = mutableMapOf<String, Long>()
+    private val LOG_COOLDOWN = mapOf("HIGH" to 300_000L, "MEDIUM" to 120_000L, "LOW" to 600_000L)
     private var recorderStarted = false
 
     private var activeRingtone: Ringtone? = null
@@ -130,18 +139,32 @@ class ParentActivity : AppCompatActivity() {
                 tvInsightMood.text    = mood
                 tvInsightPosture.text = posture
 
+                // Peak-hold: immediately snap the bar to the new value so the UI
+                // responds at once; the decay runnable then gradually pulls it back.
                 val newMotion = json.optInt("motion_level", 0).toFloat()
-                if (newMotion > currentMotionLevel) currentMotionLevel = newMotion
+                if (newMotion > currentMotionLevel) {
+                    currentMotionLevel = newMotion
+                    motionMeter.progress = newMotion.toInt()
+                }
                 val newSound = json.optInt("sound_level", 0).toFloat()
-                if (newSound > currentSoundLevel) currentSoundLevel = newSound
+                if (newSound > currentSoundLevel) {
+                    currentSoundLevel = newSound
+                    soundMeter.progress = newSound.toInt()
+                }
 
                 val masterOn = switchMasterAlert.isChecked
                 val canTriggerHigh = System.currentTimeMillis() - lastAcknowledgeTime > 60_000
 
+                // Sound-level alert: fire HIGH if baby sounds exceed sensitivity threshold
+                val soundThreshold = prefs.audioAlertSensitivity
+                val soundTriggered = json.optInt("sound_level", 0) >= soundThreshold &&
+                                     json.optBoolean("is_crying", false)
+
                 if (masterOn) {
-                    when (tier) {
-                        "HIGH"   -> if (canTriggerHigh)                  triggerHighAlert(action, status)
-                        "MEDIUM" -> if (switchMediumAlert.isChecked)     triggerMediumAlert(status)
+                    when {
+                        tier == "HIGH" && canTriggerHigh   -> triggerHighAlert(action, status)
+                        soundTriggered && canTriggerHigh   -> triggerHighAlert("Crying", status)
+                        tier == "MEDIUM" && switchMediumAlert.isChecked -> triggerMediumAlert(status)
                     }
                 }
 
@@ -151,7 +174,14 @@ class ParentActivity : AppCompatActivity() {
                     "LOW"    -> switchLowAlert.isChecked
                     else     -> false
                 }
-                if (shouldLog && (image.isNotEmpty() || tier != "LOW")) {
+                // Deduplication: same tier+action must wait cooldown before logging again
+                val logKey      = "$tier-$action"
+                val cooldown    = LOG_COOLDOWN[tier] ?: 300_000L
+                val lastLogged  = lastLoggedAt[logKey] ?: 0L
+                val dedupPassed = System.currentTimeMillis() - lastLogged > cooldown
+
+                if (shouldLog && dedupPassed && (image.isNotEmpty() || tier != "LOW")) {
+                    lastLoggedAt[logKey] = System.currentTimeMillis()
                     val ts = java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault())
                         .format(java.util.Date())
                     dbHelper.saveAlert(ts, status, image, tier, action)
@@ -214,12 +244,15 @@ class ParentActivity : AppCompatActivity() {
         tvInsightMood   = findViewById(R.id.tvInsightMood)
         tvInsightPosture = findViewById(R.id.tvInsightPosture)
 
-        switchMasterAlert = findViewById(R.id.switchMasterAlert)
-        switchMediumAlert = findViewById(R.id.switchMediumAlert)
-        switchLowAlert    = findViewById(R.id.switchLowAlert)
-        switchQuietHours  = findViewById(R.id.switchQuietHours)
-        tvQuietStart      = findViewById(R.id.tvQuietStart)
-        tvQuietEnd        = findViewById(R.id.tvQuietEnd)
+        switchMasterAlert      = findViewById(R.id.switchMasterAlert)
+        switchMasterAlertQuick = findViewById(R.id.switchMasterAlertQuick)
+        switchMediumAlert      = findViewById(R.id.switchMediumAlert)
+        switchLowAlert         = findViewById(R.id.switchLowAlert)
+        switchQuietHours       = findViewById(R.id.switchQuietHours)
+        tvQuietStart           = findViewById(R.id.tvQuietStart)
+        tvQuietEnd             = findViewById(R.id.tvQuietEnd)
+        seekAudioSens          = findViewById(R.id.seekAudioSens)
+        tvAudioSensLabel       = findViewById(R.id.tvAudioSensLabel)
 
         alertOverlay    = findViewById(R.id.alertOverlay)
         tvAlertMessage  = findViewById(R.id.tvAlertMessage)
@@ -229,21 +262,44 @@ class ParentActivity : AppCompatActivity() {
     // ── Settings persistence ───────────────────────────────────────────────────
 
     private fun restoreSettings() {
-        switchMasterAlert.isChecked = prefs.masterAlertEnabled
-        switchMediumAlert.isChecked = prefs.mediumAlertEnabled
-        switchLowAlert.isChecked    = prefs.lowAlertEnabled
-        switchQuietHours.isChecked  = prefs.quietHoursEnabled
+        switchMasterAlert.isChecked      = prefs.masterAlertEnabled
+        switchMasterAlertQuick.isChecked = prefs.masterAlertEnabled
+        switchMediumAlert.isChecked      = prefs.mediumAlertEnabled
+        switchLowAlert.isChecked         = prefs.lowAlertEnabled
+        switchQuietHours.isChecked       = prefs.quietHoursEnabled
         tvQuietStart.text = formatHour(prefs.quietHoursStart)
         tvQuietEnd.text   = formatHour(prefs.quietHoursEnd)
+
+        val savedSens = prefs.audioAlertSensitivity
+        seekAudioSens.progress = savedSens
+        tvAudioSensLabel.text  = "Alert when: ≥ $savedSens%"
     }
 
     private fun setupListeners() {
         btnDismissAlert.setOnClickListener { dismissActiveAlert() }
 
-        switchMasterAlert.setOnCheckedChangeListener { _, v -> prefs.masterAlertEnabled = v }
+        // Keep both master alert switches in sync
+        switchMasterAlert.setOnCheckedChangeListener { _, v ->
+            prefs.masterAlertEnabled = v
+            if (switchMasterAlertQuick.isChecked != v) switchMasterAlertQuick.isChecked = v
+        }
+        switchMasterAlertQuick.setOnCheckedChangeListener { _, v ->
+            prefs.masterAlertEnabled = v
+            if (switchMasterAlert.isChecked != v) switchMasterAlert.isChecked = v
+        }
         switchMediumAlert.setOnCheckedChangeListener { _, v -> prefs.mediumAlertEnabled = v }
         switchLowAlert.setOnCheckedChangeListener    { _, v -> prefs.lowAlertEnabled    = v }
         switchQuietHours.setOnCheckedChangeListener  { _, v -> prefs.quietHoursEnabled  = v }
+
+        // Audio sensitivity SeekBar
+        seekAudioSens.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                tvAudioSensLabel.text  = "Alert when: ≥ $p%"
+                if (fromUser) prefs.audioAlertSensitivity = p
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?)  {}
+        })
 
         // Quiet hours time pickers
         tvQuietStart.setOnClickListener {
@@ -347,7 +403,7 @@ class ParentActivity : AppCompatActivity() {
         if (alertOverlay.visibility == View.VISIBLE) return
         runOnUiThread {
             alertOverlay.visibility = View.VISIBLE
-            tvAlertMessage.text = "$action: $status"
+            tvAlertMessage.text = formatAlertHeadline(action)
             val blink = AlphaAnimation(1.0f, 0.2f).apply {
                 duration = 400; repeatMode = Animation.REVERSE
                 repeatCount = Animation.INFINITE
@@ -422,6 +478,34 @@ class ParentActivity : AppCompatActivity() {
         card.startAnimation(anim)
     }
 
+    // ── Event description helpers ──────────────────────────────────────────────
+
+    /**
+     * Maps tier + eventAction → a clean, parent-readable sentence.
+     * Avoids the redundant "Standing: 🚨 DANGER: Standing" pattern.
+     */
+    private fun formatEventDescription(tier: String, eventAction: String): String = when {
+        tier == "HIGH"   && eventAction == "Standing"    -> "Baby standing in crib — fall risk"
+        tier == "HIGH"   && eventAction == "Face Down"   -> "Baby rolled face-down — airways may be blocked"
+        tier == "HIGH"   && eventAction == "Crying"      -> "Sustained crying — baby needs attention"
+        tier == "HIGH"   && eventAction == "Suffocation" -> "Baby's face hidden for 5+ seconds — check now"
+        tier == "HIGH"                                   -> "Critical event — check on baby immediately"
+        tier == "MEDIUM" && eventAction == "Fussy"       -> "Baby appears fussy or unsettled"
+        tier == "MEDIUM"                                 -> "Baby needs attention"
+        eventAction == "Active"                          -> "Baby is awake and moving around"
+        eventAction == "Sleeping"                        -> "Baby is resting peacefully"
+        else                                             -> "Baby is being monitored"
+    }
+
+    /** Short one-line message for the full-screen alert overlay. */
+    private fun formatAlertHeadline(action: String): String = when (action) {
+        "Standing"    -> "Baby is standing — risk of falling from crib"
+        "Face Down"   -> "Baby rolled face-down — check airways now"
+        "Crying"      -> "Baby has been crying — needs attention"
+        "Suffocation" -> "Baby's face hidden for 5 seconds — check immediately"
+        else          -> "Check on baby — unusual activity detected"
+    }
+
     // ── History log ────────────────────────────────────────────────────────────
 
     private fun loadHistoryToUI() {
@@ -445,22 +529,27 @@ class ParentActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             }
-            val color = when (alert.tier) {
-                "HIGH"   -> "#E53935"
-                "MEDIUM" -> "#FB8C00"
-                else     -> "#43A047"
+            val (iconEmoji, accentColor) = when (alert.tier) {
+                "HIGH"   -> "🚨" to "#E53935"
+                "MEDIUM" -> "⚠️" to "#FB8C00"
+                else     -> "✅" to "#43A047"
             }
+            // Row 1: icon + timestamp + tier badge
             textLayout.addView(TextView(this).apply {
-                text = "${if (alert.tier == "HIGH") "🚨" else "🔔"} ${alert.timestamp}"
-                setTextColor(Color.parseColor(color)); textSize = 16f
+                text = "$iconEmoji  ${alert.timestamp}"
+                setTextColor(Color.parseColor(accentColor))
+                textSize = 15f
                 setTypeface(null, android.graphics.Typeface.BOLD)
             })
+            // Row 2: clean human-readable description
             textLayout.addView(TextView(this).apply {
-                text = "${alert.eventAction}: ${alert.status}"
-                setTextColor(Color.parseColor("#555555")); textSize = 14f
-                setPadding(0, 8, 0, 0)
+                text = formatEventDescription(alert.tier, alert.eventAction)
+                setTextColor(Color.parseColor("#444444"))
+                textSize = 14f
+                setPadding(0, 6, 0, 0)
             })
             content.addView(textLayout)
+            // Thumbnail (HIGH alerts only — they include a snapshot)
             if (alert.imageBase64.isNotEmpty()) {
                 try {
                     val bytes = android.util.Base64.decode(alert.imageBase64, 0)
@@ -470,10 +559,9 @@ class ParentActivity : AppCompatActivity() {
                         layoutParams = LinearLayout.LayoutParams(180, 180)
                         scaleType = ImageView.ScaleType.CENTER_CROP
                     }
-                    val ic = androidx.cardview.widget.CardView(this).apply {
+                    content.addView(androidx.cardview.widget.CardView(this).apply {
                         radius = 16f; addView(iv)
-                    }
-                    content.addView(ic)
+                    })
                 } catch (_: Exception) {}
             }
             card.addView(content)

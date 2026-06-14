@@ -60,9 +60,54 @@ class AIGovernor(context: Context) {
     private val currentConfig get() =
         modeConfigs[prefs.aiMode] ?: modeConfigs[AppPreferences.AIMode.BALANCED]!!
 
-    /** Milliseconds CameraActivity should wait between processFrame calls. */
+    /** Milliseconds CameraActivity should wait between processFrame calls (fixed mode). */
     fun getRequiredDelay(): Long =
         if (isThrottling) currentConfig.throttledDelayMs else currentConfig.analysisDelayMs
+
+    /**
+     * Hybrid MOG + YOLO scheduler.
+     *
+     * MOG's motion score (0-100) and the 15-second baby-presence lock jointly
+     * determine how aggressively YOLO runs. This replaces the flat per-mode delay
+     * with a continuously adaptive rate:
+     *
+     *  State                         | ECO  | BALANCED | PERF
+     *  ─────────────────────────────────────────────────────
+     *  Baby present + active (≥40)   | 800  |  200     | 100  ms (~5-10 FPS)
+     *  Baby present + still (≥5)     | 1500 |  400     | 200  ms
+     *  Baby present, no motion       | 2000 |  800     | 400  ms
+     *  High motion, no baby lock     | 2000 |  500     | 200  ms
+     *  Low motion (≥10)              | mode default analysisDelayMs
+     *  No motion                     | heartbeat interval (4-8 s)
+     */
+    fun getDynamicYoloDelay(motionScore: Int, babyPresentRecently: Boolean): Long {
+        if (isThrottling) return currentConfig.throttledDelayMs
+        val mode = prefs.aiMode
+        return when {
+            babyPresentRecently && motionScore >= 40 -> when (mode) {
+                AppPreferences.AIMode.ECO         ->  800L
+                AppPreferences.AIMode.PERFORMANCE ->  100L
+                else                               ->  200L
+            }
+            babyPresentRecently && motionScore >= 5  -> when (mode) {
+                AppPreferences.AIMode.ECO         -> 1500L
+                AppPreferences.AIMode.PERFORMANCE ->  200L
+                else                               ->  400L
+            }
+            babyPresentRecently                      -> when (mode) {
+                AppPreferences.AIMode.ECO         -> 2000L
+                AppPreferences.AIMode.PERFORMANCE ->  400L
+                else                               ->  800L
+            }
+            motionScore >= 50                        -> when (mode) {
+                AppPreferences.AIMode.ECO         -> 2000L
+                AppPreferences.AIMode.PERFORMANCE ->  200L
+                else                               ->  500L
+            }
+            motionScore >= 10                        -> currentConfig.analysisDelayMs
+            else                                     -> currentConfig.heartbeatMs
+        }
+    }
 
     /** Milliseconds SafetyPipeline waits before forcing a YOLO heartbeat scan. */
     fun getHeartbeatInterval(): Long = currentConfig.heartbeatMs

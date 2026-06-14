@@ -172,14 +172,44 @@
                             android:layout_height="wrap_content"
                             android:orientation="vertical"
                             android:padding="20dp">
+                            <!-- Header row: title + master alert quick toggle -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginBottom="16dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Live Insights"
+                            android:textColor="#4A4A4A"
+                            android:textSize="22sp"
+                            android:textStyle="bold"/>
+
+                        <!-- Master alert quick-toggle (prominent, right of title) -->
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:gravity="center">
                             <TextView
-                                android:layout_width="match_parent"
+                                android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="Live Insights"
+                                android:text="ALERTS"
                                 android:textColor="#4A4A4A"
-                                android:textSize="22sp"
+                                android:textSize="10sp"
                                 android:textStyle="bold"
-                                android:layout_marginBottom="24dp"/>
+                                android:layout_gravity="center"/>
+                            <androidx.appcompat.widget.SwitchCompat
+                                android:id="@+id/switchMasterAlertQuick"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true"/>
+                        </LinearLayout>
+                    </LinearLayout>
 
                             <LinearLayout
                                 android:layout_width="match_parent"
@@ -297,7 +327,7 @@
         <!-- FLOATING ACTION BUTTONS -->
         <LinearLayout
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="78dp"
             android:layout_gravity="center_horizontal"
             android:layout_marginBottom="32dp"
             android:orientation="horizontal">
@@ -575,6 +605,42 @@
                     android:focusable="true"
                     android:background="?attr/selectableItemBackground"/>
             </LinearLayout>
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginBottom="16dp"/>
+
+            <!-- Audio alert sensitivity -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Sound Alert Sensitivity"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="#4A4A4A"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView
+                android:id="@+id/tvAudioSensLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Alert when: ≥ 40%"
+                android:textColor="#888888"
+                android:textSize="12sp"
+                android:layout_marginBottom="4dp"/>
+
+            <SeekBar
+                android:id="@+id/seekAudioSens"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progress="40"
+                android:progressTint="#2196F3"
+                android:thumbTint="#E91E63"
+                android:layout_marginBottom="20dp"/>
 
             <TextView
                 android:layout_width="match_parent"

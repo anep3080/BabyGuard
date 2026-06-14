@@ -121,12 +121,13 @@ class YoloDetector(context: Context) {
 
         var bestScore = 0f; var bestIdx = -1
 
-        // Scan for highest confidence person/baby.
-        // 0.22 instead of 0.28 — Note 9's older sensor produces softer images
-        // which YOLO scores slightly lower than sharper modern sensors.
+        // 0.18 threshold — lower than original 0.28, handles:
+        //   • Note 9's older sensor producing softer images
+        //   • 2D images on a monitor (slightly lower YOLO scores)
+        //   • Baby partially out of frame
         for (i in 0 until 8400) {
             val score = data[4][i]
-            if (score > 0.22f && score > bestScore) {
+            if (score > 0.18f && score > bestScore) {
                 bestScore = score
                 bestIdx = i
             }
@@ -156,20 +157,33 @@ class YoloDetector(context: Context) {
             val shoulderY = (lShoulder.position.y + rShoulder.position.y) / 2
 
             // 1. Standing: tall box + nose above hips + legs extended.
-            //    Extra guard: shoulders must be at roughly the same Y as each other
-            //    (difference < 15% of box height). A baby lying on its side also has
-            //    a tall box, but one shoulder is much higher than the other.
+            //    Changes vs original:
+            //    - shouldersLevel gate relaxed 15% → 20% (YOLO is less precise on 2D images)
+            //    - hipsVisible confidence gate 0.30 → 0.22 (hips often under confidence on monitors)
+            //    - Fallback path: if hips low confidence but legs clearly extended + very tall box,
+            //      still flag standing (handles baby partially in frame or 2D image artifacts)
             val legLengthY     = Math.abs(ankleY - hipY)
-            val isLegsExtended = legLengthY > (h * 0.42f)
-            val shouldersLevel = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.15f)
-            val hipsVisible    = lHip.confidence > 0.3f && rHip.confidence > 0.3f
+            val isLegsExtended = legLengthY > (h * 0.40f)
+            val shouldersLevel = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.20f)
+            val hipsVisible    = lHip.confidence > 0.22f && rHip.confidence > 0.22f
+            val anklesVisible  = lAnkle.confidence > 0.22f || rAnkle.confidence > 0.22f
 
-            val isStanding = h > (w * 1.35f) &&
-                             nose.position.y < (hipY - 40) &&
-                             isLegsExtended &&
-                             shouldersLevel &&     // rules out lying-on-side
-                             hipsVisible &&
-                             nose.confidence > 0.3f
+            // Primary path: full keypoint evidence
+            val standingPrimary = h > (w * 1.35f) &&
+                                  nose.position.y < (hipY - 40) &&
+                                  isLegsExtended &&
+                                  shouldersLevel &&
+                                  hipsVisible &&
+                                  nose.confidence > 0.25f
+
+            // Fallback: very tall box + nose high + ankles visible even if hips uncertain
+            val standingFallback = h > (w * 1.6f) &&
+                                   nose.confidence > 0.30f &&
+                                   nose.position.y < (cy - h * 0.15f) &&
+                                   anklesVisible &&
+                                   shouldersLevel
+
+            val isStanding = standingPrimary || standingFallback
 
             // 2. Prone: face-down (shoulders visible, nose hidden).
             //    Extra guard: body box must be landscape (w > h * 0.8) because a baby

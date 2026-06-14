@@ -15,6 +15,9 @@ class SafetyPipeline(
     private var currentState = State.DORMANT
     fun getState(): State = currentState
     fun updateSensitivity(s: Int) { sensitivity = s.coerceIn(1, 3) }
+    /** True if YOLO confirmed a person within the last PRESENCE_LOCK_MS. */
+    fun isBabyPresentRecently(): Boolean =
+        System.currentTimeMillis() - lastBabyDetectedTime < PRESENCE_LOCK_MS
 
     private var lastFullScanTime = 0L
 
@@ -30,6 +33,13 @@ class SafetyPipeline(
     private var proneStreak    = 0
     private var standingStreak = 0
     private val POSTURE_CONFIRM = 3     // frames
+
+    // ── Baby Presence Lock ────────────────────────────────────────────────────
+    // Once YOLO finds a person, we keep scanning at full rate for PRESENCE_LOCK_MS
+    // even if MOG shows no motion. Fixes the "static image on monitor" case where
+    // background subtraction adapts and stops triggering YOLO via the motion path.
+    private var lastBabyDetectedTime = 0L
+    private val PRESENCE_LOCK_MS = 15_000L  // 15 seconds after last detection
 
     // ── Suffocation timer ─────────────────────────────────────────────────────
     private var suffocationTimerStart = 0L
@@ -75,9 +85,10 @@ class SafetyPipeline(
                           else (Math.sqrt(filteredPixels.toDouble() / 1200.0) * 8).toInt().coerceAtMost(100)
 
         val isHeartbeat = now - lastFullScanTime > heartbeatMs
+        val babyPresentRecently = now - lastBabyDetectedTime < PRESENCE_LOCK_MS
 
-        // ── Fast path: truly dormant, no heartbeat due ────────────────────────
-        if (!hasMotion && !isHeartbeat && currentState == State.DORMANT) {
+        // ── Fast path: truly dormant, no heartbeat, no recent baby detection ──
+        if (!hasMotion && !isHeartbeat && !babyPresentRecently && currentState == State.DORMANT) {
             motionDetector.setActiveLearningRate(false)   // let background adapt quickly
             val dormant = DetectionResult("🟢 Sleeping Soundly", "Sleeping", "Safe",
                 false, false, motionLevel, filteredPixels, tier = "LOW", action = "Sleeping")
@@ -86,7 +97,7 @@ class SafetyPipeline(
         }
 
         if (isHeartbeat) lastFullScanTime = now
-        val newState = if (hasMotion || isHeartbeat) State.ACTIVE else State.DORMANT
+        val newState = if (hasMotion || isHeartbeat || babyPresentRecently) State.ACTIVE else State.DORMANT
         motionDetector.setActiveLearningRate(newState == State.ACTIVE)
         currentState = newState
 
@@ -102,6 +113,7 @@ class SafetyPipeline(
         var action = "Normal"
 
         if (yoloResult != null) {
+            lastBabyDetectedTime = now   // refresh presence lock on every successful detection
             keypoints = yoloResult.keypoints
             bodyBox   = yoloResult.box
 
