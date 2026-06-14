@@ -69,6 +69,10 @@ class EmotionDetector(context: Context) {
                 }
             }
 
+            // FIX: Don't report emotion when the model is unsure — below 35% it's noise.
+            // Baby faces are out-of-distribution for adult FER models so confidence is often low.
+            if (maxConf < 0.35f) return "Calm"
+
             return moodMap[maxIdx] ?: "Calm"
 
         } catch (e: Exception) {
@@ -88,8 +92,10 @@ class EmotionDetector(context: Context) {
             val r = (pixelValue shr 16) and 0xFF
             val g = (pixelValue shr 8) and 0xFF
             val b = pixelValue and 0xFF
-            // Grayscale conversion
-            val gray = (r + g + b) / 3.0f / 255.0f
+            // FIX: ITU-R BT.601 luminance — matches how FER2013 and most emotion models
+            // were trained. Simple average (r+g+b)/3 shifts the perceived brightness and
+            // makes the model see a different face than it was trained on.
+            val gray = (0.299f * r + 0.587f * g + 0.114f * b) / 255.0f
             byteBuffer.putFloat(gray)
         }
         return byteBuffer

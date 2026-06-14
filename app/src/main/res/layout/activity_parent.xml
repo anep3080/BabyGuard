@@ -384,6 +384,36 @@
                 app:tint="#FFFFFF"
                 app:layout_constraintTop_toTopOf="parent"
                 app:layout_constraintEnd_toEndOf="parent"/>
+
+            <!-- VIDEO ACTIONS -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_margin="16dp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toStartOf="parent">
+
+                <ImageButton
+                    android:id="@+id/btnCapture"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/pill_background"
+                    android:backgroundTint="#80000000"
+                    android:src="@android:drawable/ic_menu_camera"
+                    app:tint="#FFFFFF"/>
+
+                <ImageButton
+                    android:id="@+id/btnRecord"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/pill_background"
+                    android:backgroundTint="#80000000"
+                    android:src="@drawable/record_dot"
+                    android:padding="12dp"
+                    android:scaleType="fitCenter"/>
+            </LinearLayout>
         </androidx.constraintlayout.widget.ConstraintLayout>
     </soup.neumorphism.NeumorphCardView>
 
@@ -442,6 +472,110 @@
                 android:elevation="4dp"
                 android:layout_marginBottom="24dp"/>
 
+            <!-- ALERT TOGGLES -->
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchMasterAlert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Master Alert (All Alarms)"
+                android:textColor="#4A4A4A"
+                android:checked="true"
+                android:layout_marginBottom="12dp"/>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchMediumAlert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Medium Alerts (Fussy/Motion)"
+                android:textColor="#4A4A4A"
+                android:checked="true"
+                android:layout_marginBottom="12dp"/>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchLowAlert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Low Alerts (Mood/Sleep)"
+                android:textColor="#4A4A4A"
+                android:checked="true"
+                android:layout_marginBottom="20dp"/>
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginBottom="16dp"/>
+
+            <!-- Quiet Hours section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Quiet Hours"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="#4A4A4A"
+                android:layout_marginBottom="8dp"/>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchQuietHours"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Suppress medium alerts"
+                android:textColor="#4A4A4A"
+                android:layout_marginBottom="10dp"/>
+
+            <!-- Start / End time row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="From"
+                    android:textColor="#888888"
+                    android:textSize="13sp"/>
+
+                <TextView
+                    android:id="@+id/tvQuietStart"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="22:00"
+                    android:textColor="#2196F3"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:paddingStart="8dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="To"
+                    android:textColor="#888888"
+                    android:textSize="13sp"/>
+
+                <TextView
+                    android:id="@+id/tvQuietEnd"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="07:00"
+                    android:textColor="#2196F3"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:paddingStart="8dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground"/>
+            </LinearLayout>
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -492,7 +626,7 @@
                 android:id="@+id/btnDismissAlert"
                 android:layout_width="200dp"
                 android:layout_height="70dp"
-                android:text="ACKNOWLEDGE"
+                android:text="DISMISS"
                 android:backgroundTint="#FFFFFF"
                 android:textColor="#E53935"
                 android:textStyle="bold"

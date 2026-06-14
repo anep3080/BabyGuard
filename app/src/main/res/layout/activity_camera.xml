@@ -5,11 +5,12 @@
     android:layout_height="match_parent"
     android:background="#4A4A4A">
 
+    <!-- Camera preview leaves room for the bottom control panel -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="250dp"/>
+        android:layout_marginBottom="220dp"/>
 
     <ImageButton
         android:id="@+id/btnBack"
@@ -24,12 +25,14 @@
         app:tint="#FFFFFF"
         android:elevation="8dp"/>
 
+    <!-- Skeleton / bounding-box overlay, same clip region as the preview -->
     <com.example.babyguard.OverlayView
         android:id="@+id/overlayView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="250dp"/>
+        android:layout_marginBottom="220dp"/>
 
+    <!-- Status chip (centred at top) -->
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="wrap_content"
@@ -47,7 +50,7 @@
         android:textSize="16sp"
         android:textStyle="bold" />
 
-    <!-- DIAGNOSTIC HUD -->
+    <!-- ── Diagnostic HUD (top bar) ─────────────────────────────────────────── -->
     <LinearLayout
         android:id="@+id/diagnosticHud"
         android:layout_width="match_parent"
@@ -97,22 +100,131 @@
             android:textAlignment="viewEnd"/>
     </LinearLayout>
 
+    <!-- ── Bottom control panel ──────────────────────────────────────────────── -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="250dp"
+        android:layout_height="220dp"
         android:layout_gravity="bottom"
         android:orientation="vertical"
-        android:padding="24dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
         android:background="#4A4A4A">
 
-        <TextView
+        <!-- Row 1: AI Mode selector -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Quick Tip: The smart monitoring works best with soft lighting, like a dim nightlight, so we can see baby clearly without disturbing their sleep."
-            android:textColor="#FFFFFF"
-            android:textSize="13sp"
-            android:layout_marginBottom="32dp"/>
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="10dp">
 
+            <TextView
+                android:layout_width="60dp"
+                android:layout_height="wrap_content"
+                android:text="AI Mode"
+                android:textColor="#CCCCCC"
+                android:textSize="12sp"
+                android:textStyle="bold"/>
+
+            <Button
+                android:id="@+id/btnModeEco"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="Eco"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:backgroundTint="#555555"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+
+            <Button
+                android:id="@+id/btnModeBalanced"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="Balanced"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:backgroundTint="#4CAF50"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+
+            <Button
+                android:id="@+id/btnModePerformance"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="Perf"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:backgroundTint="#555555"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+        </LinearLayout>
+
+        <!-- Row 2: Sensitivity selector -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="14dp">
+
+            <TextView
+                android:layout_width="60dp"
+                android:layout_height="wrap_content"
+                android:text="Sensitivity"
+                android:textColor="#CCCCCC"
+                android:textSize="12sp"
+                android:textStyle="bold"/>
+
+            <Button
+                android:id="@+id/btnSensLow"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="Low"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:backgroundTint="#555555"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+
+            <Button
+                android:id="@+id/btnSensNormal"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="Normal"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:backgroundTint="#4CAF50"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+
+            <Button
+                android:id="@+id/btnSensHigh"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="High"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:backgroundTint="#555555"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+        </LinearLayout>
+
+        <!-- Row 3: Sleep Screen toggle -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -124,8 +236,19 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:orientation="vertical">
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Sleep Screen" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="16sp"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="(Makes screen very dark so light doesn't disturb baby)" android:textColor="#CCCCCC" android:textSize="10sp"/>
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Sleep Screen"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Darkens screen so light won't disturb baby"
+                    android:textColor="#CCCCCC"
+                    android:textSize="10sp"/>
             </LinearLayout>
 
             <androidx.appcompat.widget.SwitchCompat
@@ -136,6 +259,7 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- ── Black screen overlay (sleep mode) ─────────────────────────────────── -->
     <FrameLayout
         android:id="@+id/blackScreenOverlay"
         android:layout_width="match_parent"
@@ -162,4 +286,5 @@
             android:textColor="#333333"
             android:textSize="14sp" />
     </FrameLayout>
+
 </FrameLayout>
