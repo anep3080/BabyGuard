@@ -4,8 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.RectF
+import android.os.Build
 import android.util.Log
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -17,143 +20,104 @@ data class BoundingBox(
     val label: String,
     val confidence: Float,
     val isStanding: Boolean,
-    val isProne: Boolean, // SIDS Logic
-    val keypoints: List<Keypoint> = emptyList() // Skeletal Data
+    val isProne: Boolean,
+    val keypoints: List<Keypoint> = emptyList()
 )
 
 class YoloDetector(context: Context) {
 
     private var interpreter: Interpreter? = null
-    private var labels: List<String> = emptyList()
+    private var useGpu = false
 
     init {
         try {
-            // Load yolov8n-pose.tflite instead of yolo_baby.tflite
             val model = loadModelFile(context, "yolov8n-pose.tflite")
             val options = Interpreter.Options()
             
-            try {
-                options.addDelegate(org.tensorflow.lite.gpu.GpuDelegate())
-                Log.i("BabyGuard_AI", "🚀 GPU Delegate enabled for Pose!")
-            } catch (e: Exception) {
-                options.setUseNNAPI(true)
-            }
+            val modelName = Build.MODEL.lowercase()
+            val isOld = modelName.contains("note 9") || modelName.contains("crown") || 
+                        modelName.contains("s9") || modelName.contains("star")
 
+            if (CompatibilityList().isDelegateSupportedOnThisDevice && !isOld) {
+                options.addDelegate(GpuDelegate())
+                useGpu = true
+                Log.i("BabyGuard_AI", "🚀 GPU Active")
+            } else {
+                options.setNumThreads(2)
+                options.setUseXNNPACK(true)
+                Log.i("BabyGuard_AI", "🛡️ CPU Stability Mode")
+            }
+            
             interpreter = Interpreter(model, options)
-            labels = listOf("baby") // Pose models usually have 1 class
-            Log.i("BabyGuard_AI", "YOLOv8-Pose Model Loaded Successfully!")
-        } catch (e: Exception) {
-            Log.e("BabyGuard_AI", "Error loading YOLOv8-Pose model: ${e.message}")
-        }
+            Log.i("BabyGuard_AI", "Model ready")
+        } catch (e: Exception) { Log.e("BabyGuard_AI", "Init Error: ${e.message}") }
     }
 
     private fun loadModelFile(context: Context, modelName: String): MappedByteBuffer {
-        val fileDescriptor = context.assets.openFd(modelName)
-        val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
-        val fileChannel = inputStream.channel
-        val startOffset = fileDescriptor.startOffset
-        val declaredLength = fileDescriptor.declaredLength
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+        val fd = context.assets.openFd(modelName)
+        return FileInputStream(fd.fileDescriptor).channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
     }
 
     fun detect(bitmap: Bitmap): BoundingBox? {
-        // ADAPTIVE SCALING: Run at 320x320 if throttling is active to save resources
-        val modelInputSize = if (org.tensorflow.lite.gpu.CompatibilityList().isDelegateSupportedOnThisDevice) 640 else 320
-        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, modelInputSize, modelInputSize, true)
-        val inputBuffer = convertBitmapToByteBuffer(resizedBitmap, modelInputSize)
-
-        // YOLOv8n-Pose output is [1, 56, 8400]
-        val output = Array(1) { Array(56) { FloatArray(8400) } }
-
-        interpreter?.run(inputBuffer, output)
-
-        var bestConfidence = 0f
-        var bestBoxIndex = -1
-
-        for (i in 0 until 8400) {
-            val confidence = output[0][4][i]
-            if (confidence > 0.45f && confidence > bestConfidence) {
-                bestConfidence = confidence
-                bestBoxIndex = i
-            }
+        if (interpreter == null) return null
+        val size = 640
+        val resized = Bitmap.createScaledBitmap(bitmap, size, size, true)
+        val input = ByteBuffer.allocateDirect(1 * size * size * 3 * 4).order(ByteOrder.nativeOrder())
+        
+        val pixels = IntArray(size * size); resized.getPixels(pixels, 0, size, 0, 0, size, size)
+        for (p in pixels) {
+            input.putFloat(((p shr 16) and 0xFF) / 255.0f)
+            input.putFloat(((p shr 8) and 0xFF) / 255.0f)
+            input.putFloat((p and 0xFF) / 255.0f)
         }
 
-        if (bestBoxIndex != -1) {
-            val scale = 640f / modelInputSize
-            val cx = output[0][0][bestBoxIndex] * 640f
-            val cy = output[0][1][bestBoxIndex] * 640f
-            val w = output[0][2][bestBoxIndex] * 640f
-            val h = output[0][3][bestBoxIndex] * 640f
+        // YOLOv8n-pose Output: 1 x 56 x 8400
+        val output = Array(1) { Array(56) { FloatArray(8400) } }
+        try { interpreter?.run(input, output) } catch (e: Exception) { 
+            Log.e("BabyGuard_AI", "Inference error: ${e.message}")
+            return null 
+        }
 
-            val box = RectF(cx - w/2, cy - h/2, cx + w/2, cy + h/2)
-            
-            // Extract Keypoints
+        var bestScore = 0f; var bestIdx = -1
+        for (i in 0 until 8400) {
+            val score = output[0][4][i]
+            if (score > 0.30f && score > bestScore) { bestScore = score; bestIdx = i }
+        }
+
+        if (bestIdx != -1) {
+            var cx = output[0][0][bestIdx]; var cy = output[0][1][bestIdx]
+            var w = output[0][2][bestIdx]; var h = output[0][3][bestIdx]
+            if (cx < 2.0f) { cx *= 640f; cy *= 640f; w *= 640f; h *= 640f }
+
             val kpts = mutableListOf<Keypoint>()
             for (k in 0 until 17) {
-                val kx = output[0][5 + k * 3][bestBoxIndex] * 640f
-                val ky = output[0][5 + k * 3 + 1][bestBoxIndex] * 640f
-                val kc = output[0][5 + k * 3 + 2][bestBoxIndex]
+                var kx = output[0][5 + k * 3][bestIdx]
+                var ky = output[0][5 + k * 3 + 1][bestIdx]
+                val kc = output[0][5 + k * 3 + 2][bestIdx]
+                if (output[0][0][bestIdx] < 2.0f) { kx *= 640f; ky *= 640f }
                 kpts.add(Keypoint(k, PointF(kx, ky), kc))
             }
 
-            // 3.3 Zero-Training SIDS Logic
-            val nose = kpts[PoseJoints.NOSE]
-            val lShoulder = kpts[PoseJoints.LEFT_SHOULDER]
-            val rShoulder = kpts[PoseJoints.RIGHT_SHOULDER]
-            
-            // Prone Risk: Shoulders visible but nose is hidden
-            val isProne = (lShoulder.confidence > 0.5f || rShoulder.confidence > 0.5f) && nose.confidence < 0.25f
-            val isStanding = h > (w * 1.35f)
+            val nose = kpts[0]; val lHip = kpts[11]; val rHip = kpts[12]
+            val hipY = (lHip.position.y + rHip.position.y) / 2
+            val isStanding = h > (w * 1.35f) && nose.position.y < hipY && nose.confidence > 0.3f
+            val isProne = (kpts[5].confidence > 0.4f || kpts[6].confidence > 0.4f) && nose.confidence < 0.2f
 
-            return BoundingBox(box, "baby", bestConfidence, isStanding, isProne, kpts)
+            return BoundingBox(RectF(cx-w/2, cy-h/2, cx+w/2, cy+h/2), "baby", bestScore, isStanding, isProne, kpts)
         }
-
         return null
     }
 
     fun getFaceCrop(bitmap: Bitmap, keypoints: List<Keypoint>): Bitmap? {
         if (keypoints.size < 5) return null
-        
-        val nose = keypoints[PoseJoints.NOSE]
-        val lEye = keypoints[PoseJoints.LEFT_EYE]
-        val rEye = keypoints[PoseJoints.RIGHT_EYE]
-
-        // Only crop if face points are relatively confident
-        if (nose.confidence < 0.3f && lEye.confidence < 0.3f && rEye.confidence < 0.3f) return null
-
-        // Calculate a box around the face based on nose and eyes
-        val faceWidth = Math.abs(rEye.position.x - lEye.position.x) * 3.5f
-        val faceHeight = faceWidth // Keep it square for the CNN
-
-        val left = (nose.position.x - faceWidth / 2).coerceAtLeast(0f)
-        val top = (nose.position.y - faceHeight / 1.5f).coerceAtLeast(0f)
-        
-        val right = (left + faceWidth).coerceAtMost(bitmap.width.toFloat())
-        val bottom = (top + faceHeight).coerceAtMost(bitmap.height.toFloat())
-
-        if (right <= left || bottom <= top) return null
-
-        return try {
-            Bitmap.createBitmap(bitmap, left.toInt(), top.toInt(), (right - left).toInt(), (bottom - top).toInt())
-        } catch (e: Exception) {
-            null
-        }
+        val nose = keypoints[0]; val lEye = keypoints[1]; val rEye = keypoints[2]
+        if (nose.confidence < 0.2f) return null
+        val headSize = Math.abs(rEye.position.x - lEye.position.x) * 4f
+        val l = (nose.position.x - headSize/2).toInt().coerceIn(0, 630)
+        val t = (nose.position.y - headSize/1.5f).toInt().coerceIn(0, 630)
+        val s = headSize.toInt().coerceIn(10, 640 - l)
+        return try { Bitmap.createBitmap(bitmap, l, t, s, s) } catch (_: Exception) { null }
     }
 
-    private fun convertBitmapToByteBuffer(bitmap: Bitmap, size: Int): ByteBuffer {
-        val byteBuffer = ByteBuffer.allocateDirect(4 * size * size * 3)
-        byteBuffer.order(ByteOrder.nativeOrder())
-        val intValues = IntArray(size * size)
-        bitmap.getPixels(intValues, 0, size, 0, 0, size, size)
-        for (pixelValue in intValues) {
-            byteBuffer.putFloat(((pixelValue shr 16) and 0xFF) / 255f)
-            byteBuffer.putFloat(((pixelValue shr 8) and 0xFF) / 255f)
-            byteBuffer.putFloat((pixelValue and 0xFF) / 255f)
-        }
-        return byteBuffer
-    }
-
-    fun close() {
-        interpreter?.close()
-    }
+    fun close() { interpreter?.close() }
 }

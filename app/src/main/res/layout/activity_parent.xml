@@ -223,9 +223,28 @@
                                 android:id="@+id/motionMeter"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:progress="30"
+                                android:progress="0"
                                 android:progressTint="#FF9800"
                                 android:thumbTint="#6200EE"
+                                android:enabled="false"
+                                android:splitTrack="false"
+                                android:layout_marginBottom="16dp"/>
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Sound Meter"
+                                android:textColor="#888888"
+                                android:textStyle="bold"
+                                android:layout_marginBottom="8dp"/>
+
+                            <SeekBar
+                                android:id="@+id/soundMeter"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:progress="0"
+                                android:progressTint="#2196F3"
+                                android:thumbTint="#E91E63"
                                 android:enabled="false"
                                 android:splitTrack="false"
                                 android:layout_marginBottom="16dp"/>
@@ -432,5 +451,54 @@
                 android:textSize="12sp"/>
         </LinearLayout>
     </androidx.cardview.widget.CardView>
+
+    <!-- HIGH ALERT OVERLAY (RED BLINKING) -->
+    <FrameLayout
+        android:id="@+id/alertOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#E53935"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvAlertTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🚨 CRITICAL ALERT"
+                android:textColor="#FFFFFF"
+                android:textSize="32sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="16dp"/>
+
+            <TextView
+                android:id="@+id/tvAlertMessage"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ACTION REQUIRED"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:layout_marginBottom="48dp"/>
+
+            <Button
+                android:id="@+id/btnDismissAlert"
+                android:layout_width="200dp"
+                android:layout_height="70dp"
+                android:text="ACKNOWLEDGE"
+                android:backgroundTint="#FFFFFF"
+                android:textColor="#E53935"
+                android:textStyle="bold"
+                android:textSize="18sp"
+                app:cornerRadius="35dp"/>
+        </LinearLayout>
+    </FrameLayout>
 
 </FrameLayout>

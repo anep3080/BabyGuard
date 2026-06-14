@@ -31,7 +31,7 @@ import java.net.Socket
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-@SuppressLint("SetTextI18n") // Silences translation warnings
+@SuppressLint("SetTextI18n")
 class CameraActivity : AppCompatActivity() {
     private lateinit var aiGovernor: AIGovernor
     private lateinit var safetyPipeline: SafetyPipeline
@@ -51,28 +51,32 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var blackScreenOverlay: FrameLayout
     private lateinit var cameraExecutor: ExecutorService
 
-    private var lastYoloScanTime = 0L; private var lastScanTime = 0L; private var unseenFaceCount = 0
-    private var lastVideoFrameTime = 0L; private var videoSocket: Socket? = null; private var videoOutputStream: DataOutputStream? = null
-    var parentIpAddress: String? = null; var isPaired = false
+    var parentIpAddress: String? = null
+    private var isPaired = false
     private var isCurrentlyStreaming = false
+    private var isVideoPlaying = false
+    private var alertClient: AlertClient? = null
 
-    private var proneRiskStartTime = 0L
-    private var isAlertEscalated = false
+    private var lastScanTime = 0L
+    private var lastYoloScanTime = 0L
+    private var lastVideoFrameTime = 0L
+    private var videoSocket: Socket? = null
+    private var videoOutputStream: DataOutputStream? = null
+
+    private var lastAlertTime = 0L
     private var lastTelemetryTime = 0L
 
     private var currentMotionIntensity = 0
-    private var currentDetectedMood = "Sleeping"
-    private var currentDetectedPosture = "Safe"
+    private var currentSoundIntensity = 0
+    private var currentDetectedMood = "Searching..."
+    private var currentDetectedPosture = "None"
     private var currentStatus = "🟢 Monitoring"
+    private var currentTier = "LOW"
+    private var currentAction = "Normal"
     
-    private var frameCount = 0
-    private var lastFpsCheckTime = 0L
-    private var currentFps = 0
-    private var isAudioStreamingRequested = false
-    private var audioStreamingSocket: Socket? = null
-    private var audioStreamingOutputStream: java.io.DataOutputStream? = null
-    private var audioRecord: android.media.AudioRecord? = null
-    private var isAudioStreaming = false
+    private var frameCount = 0; private var lastFpsCheckTime = 0L; private var currentFps = 0
+    private var audioStreamingSocket: Socket? = null; private var audioStreamingOutputStream: DataOutputStream? = null
+    private var audioRecord: android.media.AudioRecord? = null; private var isAudioStreaming = false
 
     private val batteryManager by lazy { getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager }
     private fun getBatteryPercentage(): Int = batteryManager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -82,49 +86,30 @@ class CameraActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_camera)
 
-        viewFinder = findViewById(R.id.viewFinder)
-        overlayView = findViewById(R.id.overlayView)
-        tvStatus = findViewById(R.id.tvStatus)
-        tvHudBattery = findViewById(R.id.tvHudBattery)
-        tvHudFps = findViewById(R.id.tvHudFps)
-        tvHudMotion = findViewById(R.id.tvHudMotion)
-        tvHudStage = findViewById(R.id.tvHudStage)
-        blackScreenOverlay = findViewById(R.id.blackScreenOverlay)
+        viewFinder = findViewById(R.id.viewFinder); overlayView = findViewById(R.id.overlayView)
+        tvStatus = findViewById(R.id.tvStatus); tvHudBattery = findViewById(R.id.tvHudBattery)
+        tvHudFps = findViewById(R.id.tvHudFps); tvHudMotion = findViewById(R.id.tvHudMotion)
+        tvHudStage = findViewById(R.id.tvHudStage); blackScreenOverlay = findViewById(R.id.blackScreenOverlay)
         val switchSleepMode = findViewById<SwitchCompat>(R.id.switchSleepMode)
         val ivBurnInShield = findViewById<android.widget.ImageView>(R.id.ivBurnInShield)
 
         switchSleepMode.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
-                blackScreenOverlay.isVisible = true
-                window.attributes = window.attributes.apply { screenBrightness = 0.0f }
-                // Start pulsing animation for burn-in protection
-                val pulse = android.view.animation.AlphaAnimation(0.2f, 0.6f).apply {
-                    duration = 3000
-                    repeatMode = android.view.animation.Animation.REVERSE
-                    repeatCount = android.view.animation.Animation.INFINITE
-                }
+                blackScreenOverlay.isVisible = true; window.attributes = window.attributes.apply { screenBrightness = 0.0f }
+                val pulse = android.view.animation.AlphaAnimation(0.2f, 0.6f).apply { duration = 3000; repeatMode = android.view.animation.Animation.REVERSE; repeatCount = android.view.animation.Animation.INFINITE }
                 ivBurnInShield.startAnimation(pulse)
             } else {
-                blackScreenOverlay.isGone = true
-                ivBurnInShield.clearAnimation()
-                window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
+                blackScreenOverlay.isGone = true; ivBurnInShield.clearAnimation(); window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
             }
         }
 
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                blackScreenOverlay.isGone = true
-                switchSleepMode.isChecked = false
-                window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
-                return true
-            }
+            override fun onDoubleTap(e: MotionEvent): Boolean { blackScreenOverlay.isGone = true; switchSleepMode.isChecked = false; window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }; return true }
         })
         blackScreenOverlay.setOnTouchListener { _, event -> gestureDetector.onTouchEvent(event); true }
-
         findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
 
-        org.opencv.android.OpenCVLoader.initDebug()
-        aiGovernor = AIGovernor(this)
+        org.opencv.android.OpenCVLoader.initDebug(); aiGovernor = AIGovernor(this)
         yoloDetector = YoloDetector(this); emotionDetector = EmotionDetector(this); mediaPipeDetector = MediaPipeDetector(this); audioListener = AudioListener(this)
         motionDetector = MotionDetector(); qrScanner = QrScanner(); cameraExecutor = Executors.newSingleThreadExecutor()
         safetyPipeline = SafetyPipeline(motionDetector, yoloDetector, emotionDetector, aiGovernor)
@@ -140,7 +125,11 @@ class CameraActivity : AppCompatActivity() {
             val cameraProvider = ProcessCameraProvider.getInstance(this).get()
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(viewFinder.surfaceProvider) }
 
-            val imageAnalyzer = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888).build().also {
+            val imageAnalyzer = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(android.util.Size(640, 480))
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .build().also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
                     val currentTime = System.currentTimeMillis()
                     val rawBitmap = imageProxy.toBitmap()
@@ -151,71 +140,45 @@ class CameraActivity : AppCompatActivity() {
                         if (currentTime - lastScanTime > 500) {
                             lastScanTime = currentTime
                             val targetIp = qrScanner.scanForLanIp(bitmap)
-                            if (targetIp != null) {
-                                parentIpAddress = targetIp; isPaired = true
-                                runOnUiThread { tvStatus.text = "🔗 Locked: $targetIp"; tvStatus.setTextColor(Color.GREEN) }
+                            if (targetIp != null && targetIp.isNotEmpty()) {
+                                isPaired = true 
+                                parentIpAddress = targetIp
+                                alertClient = AlertClient(targetIp, 8888).apply { start() }
+                                runOnUiThread { tvStatus.text = "🔗 Connected: $targetIp"; tvStatus.setTextColor(Color.GREEN) }
                             }
                         }
                     } else {
                         val isStreaming = videoSocket != null && !videoSocket!!.isClosed
                         
-                        // Handle Telemetry Heartbeat (6.1 + 7.1)
-                        if (currentTime - lastTelemetryTime > 1000) {
+                        if (currentTime - lastTelemetryTime > 600) {
                             lastTelemetryTime = currentTime
-                            val batteryPct = getBatteryPercentage()
+                            val batteryPct = getBatteryPercentage(); val isCrying = audioListener.isBabyCrying()
+                            currentSoundIntensity = audioListener.getLatestAmplitude()
                             
-                            val telemetryJson = org.json.JSONObject().apply {
-                                put("status", currentStatus)
-                                put("mood", currentDetectedMood)
-                                put("posture", currentDetectedPosture)
-                                put("motion_level", currentMotionIntensity)
-                                put("is_crying", audioListener.isBabyCrying())
-                                put("temp", aiGovernor.getCurrentTemperature())
-                                put("battery", batteryPct)
-                                put("fps", currentFps)
+                            if (isCrying) { currentTier = "HIGH"; currentAction = "Crying"; currentStatus = "🚨 CRYING DETECTED" }
+
+                            val json = org.json.JSONObject().apply {
+                                put("status", currentStatus); put("mood", currentDetectedMood); put("posture", currentDetectedPosture)
+                                put("motion_level", currentMotionIntensity); put("sound_level", currentSoundIntensity)
+                                put("is_crying", isCrying); put("temp", aiGovernor.getCurrentTemperature())
+                                put("battery", batteryPct); put("fps", currentFps); put("tier", currentTier); put("event_action", currentAction)
                             }.toString()
 
                             runOnUiThread {
-                                tvHudBattery.text = "🔋 $batteryPct%"
-                                tvHudFps.text = "⚡ $currentFps FPS"
-                                tvHudMotion.text = "🌀 MOG: $currentMotionIntensity"
+                                tvHudBattery.text = "🔋 $batteryPct%"; tvHudFps.text = "⚡ $currentFps FPS"; tvHudMotion.text = "🌀 MOG: $currentMotionIntensity"
                                 tvHudStage.text = if (safetyPipeline.getState() == SafetyPipeline.State.ACTIVE) "🎯 ACTIVE" else "🎯 DORMANT"
                                 tvHudStage.setTextColor(if (safetyPipeline.getState() == SafetyPipeline.State.ACTIVE) Color.RED else Color.GREEN)
                             }
-
-                            if (isPaired) {
-                                AlertClient(parentIpAddress!!, 8888, telemetryJson).start()
-                            }
+                            alertClient?.send(json)
                         }
 
-                        // FPS Calculation
-                        frameCount++
-                        if (currentTime - lastFpsCheckTime > 1000) {
-                            currentFps = frameCount
-                            frameCount = 0
-                            lastFpsCheckTime = currentTime
-                        }
+                        frameCount++; if (currentTime - lastFpsCheckTime > 1000) { currentFps = frameCount; frameCount = 0; lastFpsCheckTime = currentTime }
 
                         if (isStreaming != isCurrentlyStreaming) {
                             isCurrentlyStreaming = isStreaming
-                            if (isStreaming) {
-                                // 5.3 STREAM-TIME PAUSE: Pause vision, keep audio
-                                // (AudioListener continues to run)
-                                runOnUiThread {
-                                    tvStatus.text = "📹 Streaming Active (AI Paused)"
-                                    tvStatus.setBackgroundResource(R.drawable.pill_background) // Keep the shape
-                                    tvStatus.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#00BCD4"))
-                                }
-                            } else {
-                                // Resume audio when streaming ends if needed
-                                // (If we didn't pause it, we don't strictly need to resume here, 
-                                // but for architecture consistency we ensure it's on)
-                                audioListener.resumeListening()
-                                runOnUiThread {
-                                    tvStatus.text = "🟢 AI Engine Active"
-                                    tvStatus.setBackgroundResource(R.drawable.pill_background)
-                                    tvStatus.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#E5B800"))
-                                }
+                            runOnUiThread {
+                                if (isStreaming) { tvStatus.text = "📹 Streaming Active (AI Paused)"; tvStatus.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#00BCD4")) } 
+                                else { audioListener.resumeListening(); tvStatus.text = "🟢 Monitoring"; tvStatus.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#E5B800")) }
                             }
                         }
 
@@ -228,59 +191,38 @@ class CameraActivity : AppCompatActivity() {
                                     videoOutputStream?.writeInt(bytes.size); videoOutputStream?.write(bytes); videoOutputStream?.flush()
                                 } catch (_: Exception) { videoSocket?.close(); videoSocket = null } 
                             }
-                            
-                            // Audio Streaming (7.3)
                             if (isPaired && (audioStreamingSocket == null || audioStreamingSocket!!.isClosed)) {
                                 cameraExecutor.execute {
                                     try {
-                                        audioStreamingSocket = Socket(parentIpAddress, 8890)
-                                        audioStreamingOutputStream = java.io.DataOutputStream(audioStreamingSocket!!.getOutputStream())
+                                        audioStreamingSocket = Socket(parentIpAddress, 8890); audioStreamingOutputStream = DataOutputStream(audioStreamingSocket!!.getOutputStream())
                                         startAudioStreaming()
                                     } catch (_: Exception) { audioStreamingSocket?.close(); audioStreamingSocket = null }
                                 }
                             }
                         }
 
-                        // 5.1 & 5.3: AI Vision Pipeline (Refactored)
                         val aiDelay = aiGovernor.getRequiredDelay()
                         if (!isStreaming && currentTime - lastYoloScanTime > aiDelay) {
                             lastYoloScanTime = currentTime
+                            val result = try { safetyPipeline.processFrame(bitmap) } catch (_: Exception) { null }
                             
-                            val result = safetyPipeline.processFrame(bitmap)
-                            currentMotionIntensity = result.motionPixels
-                            currentDetectedMood = result.mood
-                            currentDetectedPosture = result.posture
-                            currentStatus = result.status
+                            if (result != null) {
+                                currentMotionIntensity = result.motionLevel
+                                currentDetectedMood = result.mood; currentDetectedPosture = result.posture
+                                currentStatus = result.status; currentTier = result.tier; currentAction = result.action
 
-                            // Handle SIDS Escalation Logic within Activity for simplicity
-                            if (result.isProne) {
-                                if (proneRiskStartTime == 0L) proneRiskStartTime = currentTime
-                                val elapsed = (currentTime - proneRiskStartTime) / 1000
-                                currentStatus = "⚠️ PRONE RISK ($elapsed s)"
-                                if (elapsed >= 10 && !isAlertEscalated) {
-                                    currentStatus = "🚨 CRITICAL: FACE DOWN!"
-                                    isAlertEscalated = true
-                                }
-                            } else {
-                                proneRiskStartTime = 0L
-                                isAlertEscalated = false
-                            }
-
-                            runOnUiThread {
-                                overlayView.setResults(result)
-                                tvStatus.text = currentStatus
-                                if (currentStatus.contains("DANGER") || currentStatus.contains("CRITICAL")) {
-                                    val stream = java.io.ByteArrayOutputStream()
-                                    bitmap.compress(Bitmap.CompressFormat.JPEG, 40, stream)
-                                    val base64Image = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
-                                    val alertJson = org.json.JSONObject().apply { 
-                                        put("status", currentStatus)
-                                        put("mood", currentDetectedMood)
-                                        put("posture", currentDetectedPosture)
-                                        put("is_crying", false)
-                                        put("image", base64Image) 
-                                    }.toString()
-                                    AlertClient(parentIpAddress!!, 8888, alertJson).start()
+                                runOnUiThread {
+                                    overlayView.setResults(result); tvStatus.text = currentStatus
+                                    if (currentTier == "HIGH" && currentTime - lastAlertTime > 20000) {
+                                        lastAlertTime = currentTime
+                                        val stream = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 40, stream); val base64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                                        val alertJson = org.json.JSONObject().apply { 
+                                            put("status", currentStatus); put("mood", currentDetectedMood); put("posture", currentDetectedPosture)
+                                            put("is_crying", false); put("image", base64); put("tier", "HIGH"); put("event_action", currentAction)
+                                            put("motion_level", currentMotionIntensity); put("sound_level", currentSoundIntensity)
+                                        }.toString()
+                                        alertClient?.send(alertJson)
+                                    }
                                 }
                             }
                         }
@@ -288,8 +230,7 @@ class CameraActivity : AppCompatActivity() {
                     imageProxy.close()
                 }
             }
-            cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalyzer)
+            cameraProvider.unbindAll(); cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalyzer)
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -297,45 +238,27 @@ class CameraActivity : AppCompatActivity() {
     private fun startAudioStreaming() {
         if (isAudioStreaming) return
         isAudioStreaming = true
-        
         Thread {
             try {
-                val bufferSize = android.media.AudioRecord.getMinBufferSize(16000, 
-                    android.media.AudioFormat.CHANNEL_IN_MONO, 
-                    android.media.AudioFormat.ENCODING_PCM_16BIT)
-                
-                audioRecord = android.media.AudioRecord(
-                    android.media.MediaRecorder.AudioSource.MIC,
-                    16000,
-                    android.media.AudioFormat.CHANNEL_IN_MONO,
-                    android.media.AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-                )
-                
-                audioRecord?.startRecording()
-                val buffer = ShortArray(bufferSize)
-                
+                val bSize = android.media.AudioRecord.getMinBufferSize(16000, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT)
+                audioRecord = android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, 16000, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, bSize)
+                audioRecord?.startRecording(); val buffer = ShortArray(bSize)
                 while (isAudioStreaming && audioStreamingSocket != null && !audioStreamingSocket!!.isClosed) {
                     val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                    if (read > 0) {
-                        for (i in 0 until read) audioStreamingOutputStream?.writeShort(buffer[i].toInt())
-                        audioStreamingOutputStream?.flush()
-                    }
+                    if (read > 0) { for (i in 0 until read) audioStreamingOutputStream?.writeShort(buffer[i].toInt()); audioStreamingOutputStream?.flush() }
                 }
-            } catch (e: Exception) {
-                Log.e("BabyGuard", "Audio Streaming Error", e)
-            } finally {
-                stopAudioStreaming()
-            }
+            } catch (e: Exception) { Log.e("BabyGuard", "Audio Stream Error", e) } finally { stopAudioStreaming() }
         }.start()
     }
 
-    private fun stopAudioStreaming() {
-        isAudioStreaming = false
-        try { audioRecord?.stop() } catch (_: Exception) {}
-        try { audioRecord?.release() } catch (_: Exception) {}
-        audioRecord = null
-        try { audioStreamingSocket?.close() } catch (_: Exception) {}
-        audioStreamingSocket = null
+    private fun stopAudioStreaming() { isAudioStreaming = false; try { audioRecord?.stop() } catch (_: Exception) {}; try { audioRecord?.release() } catch (_: Exception) {}; audioRecord = null; try { audioStreamingSocket?.close() } catch (_: Exception) {}; audioStreamingSocket = null }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        alertClient?.stopClient()
+        stopAudioStreaming()
+        stopVideoServer()
     }
+
+    private fun stopVideoServer() { isVideoPlaying = false; try { videoSocket?.close() } catch (_: Exception) {}; videoSocket = null }
 }

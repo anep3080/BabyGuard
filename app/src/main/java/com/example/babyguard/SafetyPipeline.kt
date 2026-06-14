@@ -14,8 +14,14 @@ class SafetyPipeline(
     private var currentState = State.DORMANT
     fun getState(): State = currentState
 
+    private var lastFullScanTime = 0L
+    private val HEARTBEAT_INTERVAL = 3000L
+    
+    private var suffocationTimerStart = 0L
+    private val SUFFOCATION_THRESHOLD = 5000L
+
     private val resultBuffer = mutableListOf<DetectionResult>()
-    private val BUFFER_SIZE = 5
+    private val BUFFER_SIZE = 8
 
     data class DetectionResult(
         val status: String,
@@ -27,102 +33,84 @@ class SafetyPipeline(
         val motionPixels: Int = 0,
         val keypoints: List<Keypoint> = emptyList(),
         val faceRect: android.graphics.RectF? = null,
-        val bodyBox: android.graphics.RectF? = null
+        val bodyBox: android.graphics.RectF? = null,
+        val tier: String = "LOW",
+        val action: String = "Normal"
     )
 
     fun processFrame(bitmap: Bitmap): DetectionResult {
-        // Stage 1: Motion Detection (Gatekeeper)
+        val currentTime = System.currentTimeMillis()
+        
         val motionPixels = motionDetector.getMotionPixelCount(bitmap)
-        val hasMotion = motionPixels > 2500 // Threshold from MotionDetector
-        val motionLevel = if (hasMotion) (60..100).random() else (0..10).random()
+        val hasMotion = motionPixels > 8000 
+        
+        // Logarithmic-style scaling to stop binary meter feel
+        // Range 0-100. Lower sensitivity at bottom, high at top.
+        val motionLevel = if (motionPixels < 2000) 0 
+                         else (Math.sqrt(motionPixels.toDouble() / 1000.0) * 10).toInt().coerceAtMost(100)
+        
+        val isHeartbeat = currentTime - lastFullScanTime > HEARTBEAT_INTERVAL
 
-        if (!hasMotion && currentState == State.DORMANT) {
-            return DetectionResult("🟢 Sleeping Soundly", "Sleeping", "Safe", false, false, motionLevel, motionPixels)
+        if (!hasMotion && !isHeartbeat && currentState == State.DORMANT) {
+            val dormant = DetectionResult("🟢 Sleeping Soundly", "Sleeping", "Safe", false, false, motionLevel, motionPixels, tier = "LOW", action = "Sleeping")
+            addToBuffer(dormant); return dormant
         }
 
-        // Stage 2: Wake up AI if motion detected or already active
-        currentState = if (hasMotion) State.ACTIVE else State.DORMANT
+        if (isHeartbeat) lastFullScanTime = currentTime
+        currentState = if (hasMotion || isHeartbeat) State.ACTIVE else State.DORMANT
         
         val yoloResult = yoloDetector.detect(bitmap)
         var status = if (hasMotion) "🟢 Baby is Active" else "🟢 Monitoring"
-        var mood = "Calm"
+        var mood = "Searching..."
         var posture = "Safe"
-        var isProne = false
-        var isStanding = false
-        var bodyBox: android.graphics.RectF? = null
-        var faceRect: android.graphics.RectF? = null
-        var keypoints: List<Keypoint> = emptyList()
+        var isProne = false; var isStanding = false
+        var bodyBox: android.graphics.RectF? = null; var faceRect: android.graphics.RectF? = null
+        var keypoints: List<Keypoint> = emptyList(); var tier = "LOW"; var action = "Normal"
 
         if (yoloResult != null) {
-            isProne = yoloResult.isProne
-            isStanding = yoloResult.isStanding
+            isProne = yoloResult.isProne; isStanding = yoloResult.isStanding
             posture = if (isStanding) "Standing" else if (isProne) "Face Down" else "Safe"
-            keypoints = yoloResult.keypoints
-            bodyBox = yoloResult.box
+            keypoints = yoloResult.keypoints; bodyBox = yoloResult.box
             
-            // Stage 3: Emotion Analysis
+            if (isStanding) { tier = "HIGH"; action = "Standing" }
+            else if (isProne) { tier = "HIGH"; action = "Face Down" }
+            else if (hasMotion) { tier = "MEDIUM"; action = "Active" }
+
             val faceCrop = yoloDetector.getFaceCrop(bitmap, keypoints)
             if (faceCrop != null) {
-                mood = emotionDetector.detectMood(faceCrop)
-                // Approximate face rect for diagnostics
-                faceRect = calculateFaceRect(keypoints)
-            } else if (isProne) {
-                mood = "Hidden"
-            } else {
-                mood = "Calm"
+                mood = emotionDetector.detectMood(faceCrop); faceRect = calculateFaceRect(keypoints)
+                if (mood == "Fussy") { tier = "MEDIUM"; action = "Fussy" }
+            } else if (isProne) { mood = "Hidden" } else {
+                if (suffocationTimerStart == 0L) suffocationTimerStart = currentTime
+                if (currentTime - suffocationTimerStart > SUFFOCATION_THRESHOLD) { status = "🚨 SUFFOCATION RISK"; tier = "HIGH"; action = "Suffocation" }
+                mood = "Analyzing..."
             }
-            
-            status = if (isStanding) "🚨 DANGER: Standing" else if (isProne) "⚠️ Prone Risk" else "🟢 Baby Awake"
+            if (status.startsWith("🟢") && tier == "LOW") status = "🟢 Baby Awake"
+            if (tier == "HIGH") status = if (isStanding) "🚨 DANGER: Standing" else if (isProne) "⚠️ Prone Risk" else status
+        } else {
+            suffocationTimerStart = 0L; mood = if (hasMotion) "Analyzing..." else "Sleeping"
         }
 
-        val latestResult = DetectionResult(status, mood, posture, isProne, isStanding, motionLevel, motionPixels, keypoints, faceRect, bodyBox)
-        
-        // Stage 4: Temporal Voting (Industry Stability)
+        val latestResult = DetectionResult(status, mood, posture, isProne, isStanding, motionLevel, motionPixels, keypoints, faceRect, bodyBox, tier, action)
         addToBuffer(latestResult)
         return getConsensusResult()
     }
 
     private fun calculateFaceRect(keypoints: List<Keypoint>): android.graphics.RectF? {
         if (keypoints.size < 5) return null
-        val nose = keypoints[PoseJoints.NOSE]
-        val lEye = keypoints[PoseJoints.LEFT_EYE]
-        val rEye = keypoints[PoseJoints.RIGHT_EYE]
-        
-        if (nose.confidence < 0.3f) return null
-        
-        val faceWidth = Math.abs(rEye.position.x - lEye.position.x) * 3.5f
-        val faceHeight = faceWidth
-        return android.graphics.RectF(
-            nose.position.x - faceWidth/2,
-            nose.position.y - faceHeight/1.5f,
-            nose.position.x + faceWidth/2,
-            nose.position.y + faceHeight/3f
-        )
+        val nose = keypoints[0]; val lE = keypoints[1]; val rE = keypoints[2]
+        if (nose.confidence < 0.2f) return null
+        val headSize = Math.abs(rE.position.x - lE.position.x) * 4f
+        return android.graphics.RectF(nose.position.x - headSize/2, nose.position.y - headSize/1.5f, nose.position.x + headSize/2, nose.position.y + headSize/3f)
     }
 
-    private fun addToBuffer(result: DetectionResult) {
-        resultBuffer.add(result)
-        if (resultBuffer.size > BUFFER_SIZE) {
-            resultBuffer.removeAt(0)
-        }
-    }
+    private fun addToBuffer(result: DetectionResult) { resultBuffer.add(result); if (resultBuffer.size > BUFFER_SIZE) resultBuffer.removeAt(0) }
 
     private fun getConsensusResult(): DetectionResult {
         if (resultBuffer.isEmpty()) return DetectionResult("---", "---", "---", false, false, 0)
-        
-        // Find most frequent status and mood to prevent jitter
         val statusFreq = resultBuffer.groupingBy { it.status }.eachCount()
-        val moodFreq = resultBuffer.groupingBy { it.mood }.eachCount()
-        val postureFreq = resultBuffer.groupingBy { it.posture }.eachCount()
-        
         val consensusStatus = statusFreq.maxByOrNull { it.value }?.key ?: resultBuffer.last().status
-        val consensusMood = moodFreq.maxByOrNull { it.value }?.key ?: resultBuffer.last().mood
-        val consensusPosture = postureFreq.maxByOrNull { it.value }?.key ?: resultBuffer.last().posture
-
-        return resultBuffer.last().copy(
-            status = consensusStatus,
-            mood = consensusMood,
-            posture = consensusPosture
-        )
+        val bestSample = resultBuffer.findLast { it.status == consensusStatus } ?: resultBuffer.last()
+        return bestSample.copy(status = consensusStatus)
     }
 }
