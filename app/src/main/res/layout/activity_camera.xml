@@ -3,114 +3,202 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#4A4A4A">
+    android:background="#000000">
 
-    <!-- Camera preview leaves room for the bottom control panel -->
+    <!-- Camera preview (leaves 260dp for bottom panel) -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="220dp"/>
+        android:layout_marginBottom="260dp"/>
 
+    <!-- ── Diagnostic HUD (top bar) ──────────────────────────────────────────────
+         Top-level sibling (was nested inside viewFinder, the internal-camera PreviewView, which
+         is set View.GONE in UVC mode — hiding this whole HUD along with it). Placed here, BEFORE
+         btnBack/btnFlipCamera in document order, so those circular buttons still render on top of
+         it rather than under it. Sits right under the system status bar — above tvStatus, not
+         below it — per request. -->
+    <LinearLayout
+        android:id="@+id/diagnosticHud"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="36dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/bg_hud_rounded"
+        android:orientation="vertical"
+        android:padding="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvHudBattery"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🔋 --%"
+                android:textColor="#AAAACC"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvHudFps"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="⚡ 0 FPS"
+                android:textAlignment="center"
+                android:textColor="#EAEAEA"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvHudMotion"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1.2"
+                android:text="🌀 MOG: 0"
+                android:textAlignment="center"
+                android:textColor="#FFB347"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvHudStage"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🎯 DORMANT"
+                android:textAlignment="viewEnd"
+                android:textColor="#00D4AA"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvHudSound"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🔊 0"
+                android:textColor="#7FD8FF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvHudMood"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1.2"
+                android:text="🙂 --"
+                android:textAlignment="center"
+                android:textColor="#FFD27F"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvHudTemp"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🌡️ --°"
+                android:textAlignment="viewEnd"
+                android:textColor="#AAAACC"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Real UVC (USB camera) preview surface — gone by default, shown only while
+         usingUsbCamera is true (see CameraActivity's switchToUsbCamera/switchToInternalCamera).
+         Plain TextureView: CameraActivity.applyUvcAspectFit() computes and sets explicit, centered
+         LayoutParams matching the camera's real preview aspect once it reports OPENED, instead of
+         relying on AspectRatioTextureView's built-in (orientation-aware, rotation-coupled-sensor)
+         sizing logic, which produced incorrect/zoomed, off-center framing for this fixed-
+         orientation external camera. match_parent here is just the starting size before that
+         logic runs. -->
+    <TextureView
+        android:id="@+id/usbTextureView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginBottom="260dp"
+        android:layout_gravity="center"
+        android:visibility="gone" />
+
+    <!-- Back button (flat rounded) — pushed below the diagnostic HUD (which now sits at the
+         very top, 36dp-~95dp) so the two no longer overlap. -->
     <ImageButton
         android:id="@+id/btnBack"
         android:layout_width="48dp"
         android:layout_height="48dp"
         android:layout_gravity="top|end"
-        android:layout_marginTop="48dp"
+        android:layout_marginTop="108dp"
         android:layout_marginEnd="16dp"
-        android:background="@drawable/pill_background"
-        android:backgroundTint="#80000000"
+        android:elevation="8dp"
+        android:background="@drawable/bg_camera_button_round"
         android:src="@android:drawable/ic_menu_revert"
-        app:tint="#FFFFFF"
-        android:elevation="8dp"/>
+        app:tint="#EAEAEA"/>
 
-    <!-- Skeleton / bounding-box overlay, same clip region as the preview -->
+    <!-- Camera flip button (front ↔ back) — uses ic_camera_switch (camera-with-rotation icon), DISTINCT from ic_orientation_rotate -->
+    <ImageButton
+        android:id="@+id/btnFlipCamera"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="108dp"
+        android:layout_marginEnd="76dp"
+        android:elevation="8dp"
+        android:background="@drawable/bg_camera_button_round"
+        android:src="@drawable/ic_camera_switch"
+        app:tint="#00D4AA"/>
+
+    <!-- Skeleton / bounding-box overlay -->
     <com.example.babyguard.OverlayView
         android:id="@+id/overlayView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="220dp"/>
+        android:layout_marginBottom="260dp"/>
 
-    <!-- Status chip (centred at top) -->
+    <!-- Status chip (flat rounded pill, centred at top) -->
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|center_horizontal"
         android:layout_marginTop="100dp"
-        android:background="@drawable/pill_background"
-        android:backgroundTint="#E5B800"
+        android:background="@drawable/bg_camera_status_pill"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:paddingTop="8dp"
         android:paddingBottom="8dp"
         android:text="Waiting for Parent..."
-        android:textColor="#FFFFFF"
+        android:textColor="#EAEAEA"
         android:textSize="16sp"
-        android:textStyle="bold" />
+        android:textStyle="bold"/>
 
-    <!-- ── Diagnostic HUD (top bar) ─────────────────────────────────────────── -->
-    <LinearLayout
-        android:id="@+id/diagnosticHud"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="8dp"
-        android:background="#88000000"
-        android:gravity="center_vertical">
-
-        <TextView
-            android:id="@+id/tvHudBattery"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="🔋 --%"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp" />
-
-        <TextView
-            android:id="@+id/tvHudFps"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="⚡ 0 FPS"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp"
-            android:textAlignment="center"/>
-
-        <TextView
-            android:id="@+id/tvHudMotion"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1.2"
-            android:text="🌀 MOG: 0"
-            android:textColor="#AAAAAA"
-            android:textSize="12sp"
-            android:textAlignment="center"/>
-
-        <TextView
-            android:id="@+id/tvHudStage"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="🎯 DORMANT"
-            android:textColor="#00FF00"
-            android:textSize="12sp"
-            android:textAlignment="viewEnd"/>
-    </LinearLayout>
-
-    <!-- ── Bottom control panel ──────────────────────────────────────────────── -->
+    <!-- ── Bottom glass control panel ───────────────────────────────────────────── -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="220dp"
+        android:layout_height="260dp"
         android:layout_gravity="bottom"
         android:orientation="vertical"
         android:paddingStart="20dp"
         android:paddingEnd="20dp"
         android:paddingTop="16dp"
         android:paddingBottom="16dp"
-        android:background="#4A4A4A">
+        android:background="@drawable/bg_control_panel_rounded">
+
+        <!-- Subtle top edge highlight -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#30FFFFFF"
+            android:layout_marginBottom="12dp"/>
 
         <!-- Row 1: AI Mode selector -->
         <LinearLayout
@@ -124,7 +212,7 @@
                 android:layout_width="60dp"
                 android:layout_height="wrap_content"
                 android:text="AI Mode"
-                android:textColor="#CCCCCC"
+                android:textColor="#AAAACC"
                 android:textSize="12sp"
                 android:textStyle="bold"/>
 
@@ -136,10 +224,10 @@
                 android:layout_marginStart="4dp"
                 android:text="Eco"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFF"
+                android:textColor="#AAAACC"
                 android:textSize="12sp"
-                android:backgroundTint="#555555"
-                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+                android:backgroundTint="#22FFFFFF"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
 
             <Button
                 android:id="@+id/btnModeBalanced"
@@ -149,10 +237,10 @@
                 android:layout_marginStart="4dp"
                 android:text="Balanced"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFF"
+                android:textColor="#EAEAEA"
                 android:textSize="12sp"
-                android:backgroundTint="#4CAF50"
-                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+                android:backgroundTint="#4000D4AA"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
 
             <Button
                 android:id="@+id/btnModePerformance"
@@ -162,10 +250,10 @@
                 android:layout_marginStart="4dp"
                 android:text="Perf"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFF"
+                android:textColor="#AAAACC"
                 android:textSize="12sp"
-                android:backgroundTint="#555555"
-                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+                android:backgroundTint="#22FFFFFF"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
         </LinearLayout>
 
         <!-- Row 2: Sensitivity selector -->
@@ -180,7 +268,7 @@
                 android:layout_width="60dp"
                 android:layout_height="wrap_content"
                 android:text="Sensitivity"
-                android:textColor="#CCCCCC"
+                android:textColor="#AAAACC"
                 android:textSize="12sp"
                 android:textStyle="bold"/>
 
@@ -192,10 +280,10 @@
                 android:layout_marginStart="4dp"
                 android:text="Low"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFF"
+                android:textColor="#AAAACC"
                 android:textSize="12sp"
-                android:backgroundTint="#555555"
-                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+                android:backgroundTint="#22FFFFFF"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
 
             <Button
                 android:id="@+id/btnSensNormal"
@@ -205,10 +293,10 @@
                 android:layout_marginStart="4dp"
                 android:text="Normal"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFF"
+                android:textColor="#EAEAEA"
                 android:textSize="12sp"
-                android:backgroundTint="#4CAF50"
-                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+                android:backgroundTint="#4000D4AA"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
 
             <Button
                 android:id="@+id/btnSensHigh"
@@ -218,48 +306,115 @@
                 android:layout_marginStart="4dp"
                 android:text="High"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFF"
+                android:textColor="#AAAACC"
                 android:textSize="12sp"
-                android:backgroundTint="#555555"
-                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"/>
+                android:backgroundTint="#22FFFFFF"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
         </LinearLayout>
 
-        <!-- Row 3: Sleep Screen toggle -->
+        <!-- Row 2b: Camera selector -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="10dp">
+
+            <Button
+                android:id="@+id/btnCameraSelector"
+                android:layout_width="match_parent"
+                android:layout_height="34dp"
+                android:text="📷 Internal Camera"
+                android:textAllCaps="false"
+                android:textColor="#AAAACC"
+                android:textSize="12sp"
+                android:backgroundTint="#22FFFFFF"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
+        </LinearLayout>
+
+        <!-- Row 3: Pause AI + Sleep Screen -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
+            <!-- Pause AI during stream -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:orientation="vertical">
-                <TextView
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Pause AI"
+                        android:textColor="#EAEAEA"
+                        android:textStyle="bold"
+                        android:textSize="13sp"/>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="While streaming"
+                        android:textColor="#AAAACC"
+                        android:textSize="10sp"/>
+                </LinearLayout>
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchPauseAiStream"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Sleep Screen"
-                    android:textColor="#FFFFFF"
-                    android:textStyle="bold"
-                    android:textSize="16sp"/>
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Darkens screen so light won't disturb baby"
-                    android:textColor="#CCCCCC"
-                    android:textSize="10sp"/>
+                    android:checked="true"
+                    android:theme="@style/Theme.MaterialComponents.Light"/>
             </LinearLayout>
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchSleepMode"
-                android:layout_width="wrap_content"
+            <View
+                android:layout_width="1dp"
+                android:layout_height="40dp"
+                android:background="#30FFFFFF"
+                android:layout_marginHorizontal="8dp"/>
+
+            <!-- Sleep Screen -->
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:theme="@style/Theme.MaterialComponents.Light"/>
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Sleep Screen"
+                        android:textColor="#EAEAEA"
+                        android:textStyle="bold"
+                        android:textSize="13sp"/>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="No light disturb"
+                        android:textColor="#AAAACC"
+                        android:textSize="10sp"/>
+                </LinearLayout>
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchSleepMode"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:theme="@style/Theme.MaterialComponents.Light"/>
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 
-    <!-- ── Black screen overlay (sleep mode) ─────────────────────────────────── -->
+    <!-- ── Black screen overlay (sleep mode) ─────────────────────────────────────── -->
     <FrameLayout
         android:id="@+id/blackScreenOverlay"
         android:layout_width="match_parent"
@@ -275,7 +430,7 @@
             android:layout_height="64dp"
             android:layout_gravity="center"
             android:src="@android:drawable/ic_lock_idle_lock"
-            app:tint="#22FFFFFF" />
+            app:tint="#22FFFFFF"/>
 
         <TextView
             android:layout_width="wrap_content"
@@ -284,7 +439,7 @@
             android:layout_marginBottom="100dp"
             android:text="Double-tap to wake screen"
             android:textColor="#333333"
-            android:textSize="14sp" />
+            android:textSize="14sp"/>
     </FrameLayout>
 
 </FrameLayout>

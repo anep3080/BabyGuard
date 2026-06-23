@@ -5,13 +5,14 @@
     android:layout_height="match_parent"
     android:background="#FFF8F0">
 
-    <!-- MAIN CONTENT -->
+    <!-- ── MAIN CONTENT ────────────────────────────────────────────────────────── -->
     <LinearLayout
+        android:id="@+id/mainContentRoot"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <!-- LOWERED HEADER -->
+        <!-- HEADER -->
         <LinearLayout
             android:id="@+id/headerLayout"
             android:layout_width="match_parent"
@@ -26,20 +27,22 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:orientation="vertical">
+
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Parent Unit"
                     android:textSize="28sp"
                     android:textStyle="bold"
-                    android:textColor="#4A4A4A"/>
+                    android:textColor="#333333"/>
+
                 <TextView
                     android:id="@+id/tvSubtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Connected Securely"
+                    android:text="Standby"
                     android:textSize="14sp"
-                    android:textColor="#888888"/>
+                    android:textColor="#7E57C2"/>
 
                 <LinearLayout
                     android:id="@+id/llBabyBattery"
@@ -53,38 +56,71 @@
                         android:layout_height="wrap_content"
                         android:text="Baby Battery: "
                         android:textSize="12sp"
-                        android:textColor="#AAAAAA"/>
+                        android:textColor="#7E57C2"/>
                     <ProgressBar
                         android:id="@+id/pbBabyBattery"
                         style="?android:attr/progressBarStyleHorizontal"
                         android:layout_width="40dp"
                         android:layout_height="8dp"
                         android:progress="50"
-                        android:progressTint="#4CAF50"
-                        android:progressBackgroundTint="#DDDDDD"/>
+                        android:progressTint="#A37BFF"
+                        android:progressBackgroundTint="#30B4D7FF"/>
                     <TextView
                         android:id="@+id/tvBabyBatteryPct"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text=" 50%"
                         android:textSize="10sp"
-                        android:textColor="#AAAAAA"/>
+                        android:textColor="#7E57C2"/>
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- BACK BUTTON WITH NO SHADOW -->
-            <ImageButton
-                android:id="@+id/btnMainBack"
+            <!-- Manual reconnect — forces a fresh handshake with the Baby Unit when the
+                 connection looks alive here but commands keep silently failing. -->
+            <soup.neumorphism.NeumorphCardView
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:background="@drawable/pill_background"
-                android:backgroundTint="#F2F2F2"
-                android:src="@android:drawable/ic_menu_revert"
-                app:tint="#4A4A4A"
-                android:elevation="0dp"
-                app:elevation="0dp"/>
+                android:layout_marginEnd="12dp"
+                app:neumorph_backgroundColor="#FFF8F0"
+                app:neumorph_shapeType="flat"
+                app:neumorph_strokeWidth="0dp"
+                app:neumorph_cornerFamily="rounded"
+                app:neumorph_cornerSize="16dp">
+
+                <ImageButton
+                    android:id="@+id/btnReconnect"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@android:color/transparent"
+                    android:src="@android:drawable/ic_popup_sync"
+                    android:contentDescription="Reconnect to Baby Unit"
+                    app:tint="#7E57C2"
+                    android:elevation="0dp"
+                    app:elevation="0dp"/>
+            </soup.neumorphism.NeumorphCardView>
+
+            <soup.neumorphism.NeumorphCardView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                app:neumorph_backgroundColor="#FFF8F0"
+                app:neumorph_shapeType="flat"
+                app:neumorph_strokeWidth="0dp"
+                app:neumorph_cornerFamily="rounded"
+                app:neumorph_cornerSize="16dp">
+
+                <ImageButton
+                    android:id="@+id/btnMainBack"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@android:color/transparent"
+                    android:src="@android:drawable/ic_menu_revert"
+                    app:tint="#7E57C2"
+                    android:elevation="0dp"
+                    app:elevation="0dp"/>
+            </soup.neumorphism.NeumorphCardView>
         </LinearLayout>
 
+        <!-- SCROLLABLE CONTENT -->
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="0dp"
@@ -97,7 +133,7 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <!-- PAIRING SECTION -->
+                <!-- ── PAIRING SECTION ───────────────────────────────────────── -->
                 <LinearLayout
                     android:id="@+id/pairingLayout"
                     android:layout_width="match_parent"
@@ -105,54 +141,76 @@
                     android:orientation="vertical"
                     android:visibility="visible">
 
+                    <!-- QR code — neumorphic card -->
                     <soup.neumorphism.NeumorphCardView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        app:neumorph_shapeType="pressed">
+                        app:neumorph_backgroundColor="#FFF8F0"
+                        app:neumorph_shapeType="flat"
+                        app:neumorph_strokeWidth="0dp"
+                        app:neumorph_cornerFamily="rounded"
+                        app:neumorph_cornerSize="20dp">
+
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="vertical"
                             android:gravity="center"
                             android:padding="24dp">
+
                             <ImageView
                                 android:id="@+id/ivQrCode"
                                 android:layout_width="250dp"
                                 android:layout_height="250dp"
                                 android:scaleType="fitCenter"
                                 android:layout_marginBottom="16dp"/>
+
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Scan to Pair Baby Unit"
-                                android:textColor="#4A4A4A"
+                                android:textColor="#333333"
                                 android:textStyle="bold"
                                 android:textSize="18sp"/>
                         </LinearLayout>
                     </soup.neumorphism.NeumorphCardView>
 
-                    <!-- WIFI WARNING AND NOTE -->
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="⚠️ Ensure both devices are connected to the same WiFi network."
-                        android:textColor="#FF5252"
-                        android:textSize="12sp"
+                        android:layout_marginTop="14dp"
+                        android:text="Open BabyGuard on the other device, switch it to Baby Unit mode, then scan this code to connect securely over your local network."
+                        android:textColor="#666666"
+                        android:textSize="13sp"
                         android:textAlignment="center"
-                        android:layout_marginTop="12dp"/>
+                        android:lineSpacingExtra="2dp"/>
+
+                    <!-- Pairing action -->
+                    <Button
+                        android:id="@+id/btnPairQr"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:layout_marginTop="16dp"
+                        android:layout_marginBottom="4dp"
+                        android:text="Refresh QR Code"
+                        android:textAllCaps="false"
+                        android:textSize="13sp"
+                        android:backgroundTint="#50A37BFF"
+                        style="@style/Widget.BabyGuard.Button.PillPastel"/>
 
                     <TextView
+                        android:id="@+id/tvPairingHint"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="(Note: QR code will only be displayed when device is connected to WiFi)"
-                        android:textColor="#888888"
-                        android:textSize="11sp"
+                        android:text="⚠️ Ensure both devices are on the same WiFi network."
+                        android:textColor="#CC7000"
+                        android:textSize="12sp"
                         android:textAlignment="center"
-                        android:layout_marginTop="4dp"
+                        android:layout_marginTop="8dp"
                         android:layout_marginBottom="16dp"/>
                 </LinearLayout>
 
-                <!-- DASHBOARD / LIVE INSIGHTS -->
+                <!-- ── DASHBOARD / LIVE INSIGHTS ─────────────────────────────── -->
                 <LinearLayout
                     android:id="@+id/dashboardLayout"
                     android:layout_width="match_parent"
@@ -160,148 +218,200 @@
                     android:orientation="vertical"
                     android:visibility="gone">
 
-                    <androidx.cardview.widget.CardView
+                    <!-- Live Insights — neumorphic soft-UI card -->
+                    <soup.neumorphism.NeumorphCardView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        app:cardBackgroundColor="#b4d7ff"
-                        app:cardCornerRadius="24dp"
-                        app:cardElevation="0dp"
+                        app:neumorph_backgroundColor="#FFF8F0"
+                        app:neumorph_shapeType="flat"
+                        app:neumorph_strokeWidth="0dp"
                         android:layout_marginBottom="16dp">
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="vertical"
-                            android:padding="20dp">
-                            <!-- Header row: title + master alert quick toggle -->
+
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:layout_marginBottom="16dp">
+                        android:orientation="vertical"
+                        android:padding="20dp">
 
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="Live Insights"
-                            android:textColor="#4A4A4A"
-                            android:textSize="22sp"
-                            android:textStyle="bold"/>
-
-                        <!-- Master alert quick-toggle (prominent, right of title) -->
+                        <!-- Header row: title + master alert quick-toggle -->
                         <LinearLayout
-                            android:layout_width="wrap_content"
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:orientation="vertical"
-                            android:gravity="center">
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginBottom="16dp">
+
                             <TextView
-                                android:layout_width="wrap_content"
+                                android:layout_width="0dp"
                                 android:layout_height="wrap_content"
-                                android:text="ALERTS"
-                                android:textColor="#4A4A4A"
-                                android:textSize="10sp"
-                                android:textStyle="bold"
-                                android:layout_gravity="center"/>
-                            <androidx.appcompat.widget.SwitchCompat
-                                android:id="@+id/switchMasterAlertQuick"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:checked="true"/>
-                        </LinearLayout>
-                    </LinearLayout>
+                                android:layout_weight="1"
+                                android:text="Live Insights"
+                                android:textColor="#333333"
+                                android:textSize="22sp"
+                                android:textStyle="bold"/>
 
                             <LinearLayout
-                                android:layout_width="match_parent"
+                                android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:orientation="horizontal"
-                                android:layout_marginBottom="24dp">
-
-                                <soup.neumorphism.NeumorphCardView
-                                    android:layout_width="0dp"
+                                android:orientation="vertical"
+                                android:gravity="center">
+                                <TextView
+                                    android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:layout_weight="1"
-                                    app:neumorph_shapeType="pressed">
-                                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="12dp" android:gravity="center">
-                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Mood" android:textColor="#888888" android:textSize="12sp"/>
-                                        <TextView android:id="@+id/tvInsightMood" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Calm" android:textColor="#4CAF50" android:textSize="18sp" android:textStyle="bold"/>
-                                    </LinearLayout>
-                                </soup.neumorphism.NeumorphCardView>
-
-                                <soup.neumorphism.NeumorphCardView
-                                    android:layout_width="0dp"
+                                    android:text="ALERTS"
+                                    android:textColor="#7E57C2"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold"
+                                    android:layout_gravity="center"/>
+                                <androidx.appcompat.widget.SwitchCompat
+                                    android:id="@+id/switchMasterAlertQuick"
+                                    android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:layout_weight="1"
-                                    app:neumorph_shapeType="pressed">
-                                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="12dp" android:gravity="center">
-                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Posture" android:textColor="#888888" android:textSize="12sp"/>
-                                        <TextView android:id="@+id/tvInsightPosture" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Safe" android:textColor="#2196F3" android:textSize="18sp" android:textStyle="bold"/>
-                                    </LinearLayout>
-                                </soup.neumorphism.NeumorphCardView>
+                                    android:checked="true"
+                                    android:theme="@style/Theme.MaterialComponents.Light"/>
                             </LinearLayout>
-
-                            <TextView
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:text="Motion Meter"
-                                android:textColor="#888888"
-                                android:textStyle="bold"
-                                android:layout_marginBottom="8dp"/>
-
-                            <!-- MOTION METER AS SEEKBAR WITH DISTINCT THUMB -->
-                            <SeekBar
-                                android:id="@+id/motionMeter"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:progress="0"
-                                android:progressTint="#FF9800"
-                                android:thumbTint="#6200EE"
-                                android:enabled="false"
-                                android:splitTrack="false"
-                                android:layout_marginBottom="16dp"/>
-
-                            <TextView
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:text="Sound Meter"
-                                android:textColor="#888888"
-                                android:textStyle="bold"
-                                android:layout_marginBottom="8dp"/>
-
-                            <SeekBar
-                                android:id="@+id/soundMeter"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:progress="0"
-                                android:progressTint="#2196F3"
-                                android:thumbTint="#E91E63"
-                                android:enabled="false"
-                                android:splitTrack="false"
-                                android:layout_marginBottom="16dp"/>
-
                         </LinearLayout>
-                    </androidx.cardview.widget.CardView>
 
-                    <!-- AI DISCLAIMER -->
+                        <!-- Mood / Posture chips -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginBottom="20dp">
+
+                            <soup.neumorphism.NeumorphCardView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginEnd="6dp"
+                                app:neumorph_backgroundColor="#FFF8F0"
+                                app:neumorph_shapeType="pressed"
+                                app:neumorph_strokeWidth="0dp"
+                                app:neumorph_cornerFamily="rounded"
+                                app:neumorph_cornerSize="14dp">
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="vertical"
+                                    android:padding="14dp"
+                                    android:gravity="center">
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="Mood"
+                                        android:textColor="#7E57C2"
+                                        android:textSize="12sp"/>
+                                    <TextView
+                                        android:id="@+id/tvInsightMood"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="Calm"
+                                        android:textColor="#A37BFF"
+                                        android:textSize="18sp"
+                                        android:textStyle="bold"/>
+                                </LinearLayout>
+                            </soup.neumorphism.NeumorphCardView>
+
+                            <soup.neumorphism.NeumorphCardView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginStart="6dp"
+                                app:neumorph_backgroundColor="#FFF8F0"
+                                app:neumorph_shapeType="pressed"
+                                app:neumorph_strokeWidth="0dp"
+                                app:neumorph_cornerFamily="rounded"
+                                app:neumorph_cornerSize="14dp">
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="vertical"
+                                    android:padding="14dp"
+                                    android:gravity="center">
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="Posture"
+                                        android:textColor="#7E57C2"
+                                        android:textSize="12sp"/>
+                                    <TextView
+                                        android:id="@+id/tvInsightPosture"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="Safe"
+                                        android:textColor="#A37BFF"
+                                        android:textSize="18sp"
+                                        android:textStyle="bold"/>
+                                </LinearLayout>
+                            </soup.neumorphism.NeumorphCardView>
+                        </LinearLayout>
+
+                        <!-- Motion meter -->
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Motion"
+                            android:textColor="#FFB347"
+                            android:textStyle="bold"
+                            android:textSize="12sp"
+                            android:layout_marginBottom="6dp"/>
+
+                        <SeekBar
+                            android:id="@+id/motionMeter"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:progress="0"
+                            android:progressTint="#FFB347"
+                            android:progressBackgroundTint="#30E0A060"
+                            android:thumbTint="#FFB347"
+                            android:enabled="false"
+                            android:splitTrack="false"/>
+
+                        <!-- Sound meter — mirrors tvHudSound on the Baby Unit (🔊 color #7FD8FF) -->
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Sound"
+                            android:textColor="#3FA9D8"
+                            android:textStyle="bold"
+                            android:textSize="12sp"
+                            android:layout_marginTop="14dp"
+                            android:layout_marginBottom="6dp"/>
+
+                        <SeekBar
+                            android:id="@+id/soundMeter"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:progress="0"
+                            android:progressTint="#7FD8FF"
+                            android:progressBackgroundTint="#307FD8FF"
+                            android:thumbTint="#7FD8FF"
+                            android:enabled="false"
+                            android:splitTrack="false"/>
+
+                    </LinearLayout>
+                    </soup.neumorphism.NeumorphCardView>
+
+                    <!-- AI disclaimer -->
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="AI is not perfect and can make mistakes. Do not rely solely on this monitor."
-                        android:textColor="#AAAAAA"
+                        android:textColor="#A37BFF"
                         android:textSize="11sp"
                         android:textStyle="italic"
                         android:textAlignment="center"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="4dp"
                         android:layout_marginBottom="16dp"/>
 
-                    <!-- ALWAYS VISIBLE EVENT LOG -->
+                    <!-- Event Log header -->
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="Event Log"
                         android:textSize="22sp"
                         android:textStyle="bold"
-                        android:textColor="#4A4A4A"
+                        android:textColor="#333333"
                         android:layout_marginBottom="12dp"
                         android:layout_marginStart="8dp"/>
 
@@ -310,6 +420,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical">
+
                         <TextView
                             android:id="@+id/tvEmptyLog"
                             android:layout_width="match_parent"
@@ -317,14 +428,15 @@
                             android:text="No events recorded yet."
                             android:textAlignment="center"
                             android:layout_marginTop="32dp"
-                            android:textColor="#AAAAAA"
+                            android:textColor="#A37BFF"
                             android:visibility="gone"/>
                     </LinearLayout>
                 </LinearLayout>
+
             </LinearLayout>
         </ScrollView>
 
-        <!-- FLOATING ACTION BUTTONS -->
+        <!-- ── FLOATING ACTION BUTTONS ──────────────────────────────────────────── -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="78dp"
@@ -338,9 +450,9 @@
                 android:layout_height="wrap_content"
                 android:layout_margin="8dp"
                 android:src="@android:drawable/presence_video_online"
-                app:backgroundTint="#FFFFFF"
-                app:elevation="8dp"
-                app:tint="#f00090" />
+                app:backgroundTint="#40B4D7FF"
+                app:elevation="0dp"
+                app:tint="#A37BFF"/>
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/fabMic"
@@ -348,9 +460,9 @@
                 android:layout_height="wrap_content"
                 android:layout_margin="8dp"
                 android:src="@android:drawable/ic_btn_speak_now"
-                app:backgroundTint="#FFFFFF"
-                app:elevation="8dp"
-                app:tint="#888888" />
+                app:backgroundTint="#40B4D7FF"
+                app:elevation="0dp"
+                app:tint="#7E57C2"/>
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/fabSettings"
@@ -358,301 +470,402 @@
                 android:layout_height="wrap_content"
                 android:layout_margin="8dp"
                 android:src="@android:drawable/ic_menu_preferences"
-                app:backgroundTint="#FFFFFF"
-                app:elevation="8dp"
-                app:tint="#4A4Ad3" />
+                app:backgroundTint="#40B4D7FF"
+                app:elevation="0dp"
+                app:tint="#7E57C2"/>
         </LinearLayout>
     </LinearLayout>
 
-    <!-- SLIDING CARD: VIDEO STREAM (Top-Down, 9:16) -->
-    <soup.neumorphism.NeumorphCardView
+    <!-- ── VIDEO STREAM OVERLAY ─────────────────────────────────────────────────
+         Transparent full-screen layer so the live-view box and the control island below it can
+         be centered as ONE group, both horizontally and vertically — for both UVC and internal-
+         camera mode, since this same layout serves whichever source is active. The island is now
+         a separate card below the live view, not overlaid on top of it. ─────────────────────── -->
+    <androidx.cardview.widget.CardView
         android:id="@+id/cardVideo"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top"
-        android:layout_margin="16dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
         android:visibility="gone"
-        app:neumorph_backgroundColor="#FFF8F0"
-        app:neumorph_shapeType="flat">
+        app:cardBackgroundColor="#00000000"
+        app:cardElevation="0dp">
 
-        <androidx.constraintlayout.widget.ConstraintLayout
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:padding="4dp">
+            android:layout_gravity="center"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:padding="16dp">
 
-            <androidx.cardview.widget.CardView
-                android:id="@+id/videoContainer"
-                android:layout_width="0dp"
-                android:layout_height="0dp"
-                app:cardCornerRadius="20dp"
-                app:cardElevation="0dp"
-                app:layout_constraintDimensionRatio="H,9:16"
-                app:layout_constraintTop_toTopOf="parent"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintEnd_toEndOf="parent">
+            <!-- Live-view box. The inner ConstraintLayout self-sizes (wrap_content) to whatever
+                 height the ratio-locked videoContainer resolves to, so this group is only as
+                 tall as the video, not the full screen. The ratio itself is kept exactly in sync
+                 with the Baby Unit's real camera feed (UVC or internal) by
+                 ParentActivity.applyVideoContainerAspect(), driven by each incoming frame's
+                 actual dimensions. -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
 
-                <FrameLayout
+                <androidx.constraintlayout.widget.ConstraintLayout
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:background="#000000">
-                    <SurfaceView
-                        android:id="@+id/svLiveVideo"
+                    android:layout_height="wrap_content"
+                    android:padding="4dp">
+
+                    <androidx.cardview.widget.CardView
+                        android:id="@+id/videoContainer"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        app:cardCornerRadius="20dp"
+                        app:cardElevation="0dp"
+                        app:layout_constraintDimensionRatio="H,9:16"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintEnd_toEndOf="parent">
+
+                        <FrameLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:background="#000000">
+                            <SurfaceView
+                                android:id="@+id/svLiveVideo"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"/>
+                        </FrameLayout>
+                    </androidx.cardview.widget.CardView>
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <!-- Close button — stays a top-end overlay on the live-view box itself -->
+                <androidx.cardview.widget.CardView
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_gravity="top|end"
+                    android:layout_margin="20dp"
+                    app:cardBackgroundColor="#80000000"
+                    app:cardCornerRadius="14dp"
+                    app:cardElevation="0dp">
+
+                    <ImageButton
+                        android:id="@+id/btnCloseVideo"
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"/>
-                </FrameLayout>
-            </androidx.cardview.widget.CardView>
+                        android:layout_height="match_parent"
+                        android:background="@android:color/transparent"
+                        android:src="@android:drawable/ic_menu_close_clear_cancel"
+                        app:tint="#FFFFFF"/>
+                </androidx.cardview.widget.CardView>
+            </FrameLayout>
 
-            <ImageButton
-                android:id="@+id/btnCloseVideo"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_margin="16dp"
-                android:background="@drawable/pill_background"
-                android:backgroundTint="#80000000"
-                android:src="@android:drawable/ic_menu_close_clear_cancel"
-                app:tint="#FFFFFF"
-                app:layout_constraintTop_toTopOf="parent"
-                app:layout_constraintEnd_toEndOf="parent"/>
-
-            <!-- VIDEO ACTIONS -->
+            <!-- ── Control island — its own separate card, NOT overlapping the live view,
+                 anchored directly under it and centered as part of the same group, in both
+                 UVC and internal-camera modes (same layout serves both) ──────────────────── -->
             <LinearLayout
+                android:id="@+id/liveViewControlBar"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="56dp"
+                android:layout_marginTop="16dp"
+                android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:layout_margin="16dp"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:layout_constraintStart_toStartOf="parent">
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:background="@drawable/bg_island_rounded">
 
-                <ImageButton
-                    android:id="@+id/btnCapture"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="8dp"
-                    android:background="@drawable/pill_background"
-                    android:backgroundTint="#80000000"
-                    android:src="@android:drawable/ic_menu_camera"
-                    app:tint="#FFFFFF"/>
+                <!-- Rotate / orientation button -->
+                <androidx.cardview.widget.CardView
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    app:cardBackgroundColor="#33FFFFFF"
+                    app:cardCornerRadius="14dp"
+                    app:cardElevation="0dp">
 
-                <ImageButton
-                    android:id="@+id/btnRecord"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:background="@drawable/pill_background"
-                    android:backgroundTint="#80000000"
-                    android:src="@drawable/record_dot"
-                    android:padding="12dp"
-                    android:scaleType="fitCenter"/>
+                    <ImageButton
+                        android:id="@+id/btnRotateVideo"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="@android:color/transparent"
+                        android:src="@drawable/ic_orientation_rotate"
+                        app:tint="#FFFFFF"/>
+                </androidx.cardview.widget.CardView>
+
+                <!-- Capture -->
+                <androidx.cardview.widget.CardView
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    app:cardBackgroundColor="#33FFFFFF"
+                    app:cardCornerRadius="14dp"
+                    app:cardElevation="0dp">
+
+                    <ImageButton
+                        android:id="@+id/btnCapture"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="@android:color/transparent"
+                        android:src="@android:drawable/ic_menu_camera"
+                        app:tint="#FFFFFF"/>
+                </androidx.cardview.widget.CardView>
+
+                <!-- Record -->
+                <androidx.cardview.widget.CardView
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    app:cardBackgroundColor="#00000000"
+                    app:cardCornerRadius="14dp"
+                    app:cardElevation="0dp">
+
+                    <ImageButton
+                        android:id="@+id/btnRecord"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="@drawable/bg_record_dot_circle"
+                        android:src="@drawable/record_dot"
+                        android:padding="10dp"
+                        android:scaleType="fitCenter"/>
+                </androidx.cardview.widget.CardView>
             </LinearLayout>
-        </androidx.constraintlayout.widget.ConstraintLayout>
-    </soup.neumorphism.NeumorphCardView>
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
 
-    <!-- SLIDING CARD: SETTINGS (Right-to-Center, Floating) -->
-    <androidx.cardview.widget.CardView
+    <!-- ── SETTINGS CARD (neumorphic, slides in from right) ───────────────────── -->
+    <soup.neumorphism.NeumorphCardView
         android:id="@+id/cardSettings"
         android:layout_width="300dp"
         android:layout_height="wrap_content"
         android:layout_gravity="center_vertical|end"
         android:layout_margin="16dp"
         android:visibility="gone"
-        app:cardBackgroundColor="#b4d7ff"
-        app:cardCornerRadius="24dp"
-        app:cardElevation="0dp">
+        app:neumorph_backgroundColor="#FFF8F0"
+        app:neumorph_shapeType="flat"
+        app:neumorph_strokeWidth="0dp"
+        app:neumorph_cornerFamily="rounded"
+        app:neumorph_cornerSize="20dp">
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="24dp"
-            android:background="@drawable/blue_border_background">
+            android:padding="24dp">
 
-            <RelativeLayout
-                android:layout_width="match_parent"
+        <!-- Settings header row -->
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp">
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="32dp">
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Settings"
-                    android:textSize="24sp"
-                    android:textStyle="bold"
-                    android:textColor="#4A4A4A"/>
+                android:text="Settings"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#333333"/>
+            <soup.neumorphism.NeumorphCardView
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_alignParentEnd="true"
+                app:neumorph_backgroundColor="#FFF8F0"
+                app:neumorph_shapeType="flat"
+                app:neumorph_strokeWidth="0dp"
+                app:neumorph_cornerFamily="rounded"
+                app:neumorph_cornerSize="14dp">
 
-                <!-- BACK BUTTON FOR SETTINGS WITH NO SHADOW -->
                 <ImageButton
                     android:id="@+id/btnCloseSettings"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_alignParentEnd="true"
-                    android:background="@drawable/pill_background"
-                    android:backgroundTint="#F2F2F2"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@android:color/transparent"
                     android:src="@android:drawable/ic_menu_close_clear_cancel"
-                    app:tint="#4A4A4A"
+                    app:tint="#7E57C2"
                     android:elevation="0dp"
                     app:elevation="0dp"/>
-            </RelativeLayout>
+            </soup.neumorphism.NeumorphCardView>
+        </RelativeLayout>
 
-            <Button
-                android:id="@+id/btnClearLog"
-                android:layout_width="match_parent"
-                android:layout_height="60dp"
-                android:text="Clear Event Log"
-                android:textAllCaps="false"
-                android:backgroundTint="#FF5252"
-                android:textColor="#FFFFFF"
-                android:elevation="4dp"
-                android:layout_marginBottom="24dp"/>
+        <Button
+            android:id="@+id/btnClearLog"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:text="Clear Event Log"
+            android:textAllCaps="false"
+            android:backgroundTint="#80CC2222"
+            android:textColor="#FFFFFF"
+            android:elevation="0dp"
+            android:layout_marginBottom="20dp"
+            style="@style/Widget.BabyGuard.Button.PillPastel"/>
 
-            <!-- ALERT TOGGLES -->
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchMasterAlert"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Master Alert (All Alarms)"
-                android:textColor="#4A4A4A"
-                android:checked="true"
-                android:layout_marginBottom="12dp"/>
+        <!-- Alert toggles -->
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchMasterAlert"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Master Alert (All Alarms)"
+            android:textColor="#333333"
+            android:checked="true"
+            android:layout_marginBottom="12dp"
+            android:theme="@style/Theme.MaterialComponents.Light"/>
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchMediumAlert"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Medium Alerts (Fussy/Motion)"
-                android:textColor="#4A4A4A"
-                android:checked="true"
-                android:layout_marginBottom="12dp"/>
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchMediumAlert"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Medium Alerts (Fussy/Motion)"
+            android:textColor="#333333"
+            android:checked="true"
+            android:layout_marginBottom="12dp"
+            android:theme="@style/Theme.MaterialComponents.Light"/>
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchLowAlert"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Low Alerts (Mood/Sleep)"
-                android:textColor="#4A4A4A"
-                android:checked="true"
-                android:layout_marginBottom="20dp"/>
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchLowAlert"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Low Alerts (Mood/Sleep)"
+            android:textColor="#333333"
+            android:checked="true"
+            android:layout_marginBottom="20dp"
+            android:theme="@style/Theme.MaterialComponents.Light"/>
 
-            <!-- Divider -->
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#CCCCCC"
-                android:layout_marginBottom="16dp"/>
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#40A37BFF"
+            android:layout_marginBottom="16dp"/>
 
-            <!-- Quiet Hours section -->
+        <!-- Quiet hours -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Quiet Hours"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="#333333"
+            android:layout_marginBottom="8dp"/>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchQuietHours"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Suppress medium alerts"
+            android:textColor="#7E57C2"
+            android:layout_marginBottom="10dp"
+            android:theme="@style/Theme.MaterialComponents.Light"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="20dp">
+
             <TextView
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Quiet Hours"
-                android:textSize="14sp"
+                android:text="From"
+                android:textColor="#7E57C2"
+                android:textSize="13sp"/>
+
+            <TextView
+                android:id="@+id/tvQuietStart"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="22:00"
+                android:textColor="#A37BFF"
+                android:textSize="15sp"
                 android:textStyle="bold"
-                android:textColor="#4A4A4A"
-                android:layout_marginBottom="8dp"/>
+                android:paddingStart="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackground"/>
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchQuietHours"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Suppress medium alerts"
-                android:textColor="#4A4A4A"
-                android:layout_marginBottom="10dp"/>
-
-            <!-- Start / End time row -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="20dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="From"
-                    android:textColor="#888888"
-                    android:textSize="13sp"/>
-
-                <TextView
-                    android:id="@+id/tvQuietStart"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="22:00"
-                    android:textColor="#2196F3"
-                    android:textSize="15sp"
-                    android:textStyle="bold"
-                    android:paddingStart="8dp"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:background="?attr/selectableItemBackground"/>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="To"
-                    android:textColor="#888888"
-                    android:textSize="13sp"/>
-
-                <TextView
-                    android:id="@+id/tvQuietEnd"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="07:00"
-                    android:textColor="#2196F3"
-                    android:textSize="15sp"
-                    android:textStyle="bold"
-                    android:paddingStart="8dp"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:background="?attr/selectableItemBackground"/>
-            </LinearLayout>
-
-            <!-- Divider -->
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#CCCCCC"
-                android:layout_marginBottom="16dp"/>
-
-            <!-- Audio alert sensitivity -->
             <TextView
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Sound Alert Sensitivity"
-                android:textSize="14sp"
+                android:text="To"
+                android:textColor="#7E57C2"
+                android:textSize="13sp"/>
+
+            <TextView
+                android:id="@+id/tvQuietEnd"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="07:00"
+                android:textColor="#A37BFF"
+                android:textSize="15sp"
                 android:textStyle="bold"
-                android:textColor="#4A4A4A"
-                android:layout_marginBottom="4dp"/>
-
-            <TextView
-                android:id="@+id/tvAudioSensLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Alert when: ≥ 40%"
-                android:textColor="#888888"
-                android:textSize="12sp"
-                android:layout_marginBottom="4dp"/>
-
-            <SeekBar
-                android:id="@+id/seekAudioSens"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="100"
-                android:progress="40"
-                android:progressTint="#2196F3"
-                android:thumbTint="#E91E63"
-                android:layout_marginBottom="20dp"/>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="App Version 1.0.5\nBabyGuard Smart Monitor"
-                android:textAlignment="center"
-                android:textColor="#AAAAAA"
-                android:textSize="12sp"/>
+                android:paddingStart="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackground"/>
         </LinearLayout>
-    </androidx.cardview.widget.CardView>
 
-    <!-- HIGH ALERT OVERLAY (RED BLINKING) -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#40A37BFF"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- High Alert sound -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="High Alert Sound"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="#333333"
+            android:layout_marginBottom="8dp"/>
+
+        <LinearLayout
+            android:id="@+id/rowAlarmSound"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackground"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:layout_marginBottom="20dp">
+
+            <TextView
+                android:id="@+id/tvAlarmSoundName"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Default Alarm Sound"
+                android:textColor="#A37BFF"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:ellipsize="end"
+                android:maxLines="1"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Change &#8250;"
+                android:textColor="#7E57C2"
+                android:textSize="13sp"/>
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#40A37BFF"
+            android:layout_marginBottom="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="App Version 1.0.5\nBabyGuard Smart Monitor"
+            android:textAlignment="center"
+            android:textColor="#A37BFF"
+            android:textSize="12sp"/>
+        </LinearLayout>
+    </soup.neumorphism.NeumorphCardView>
+
+    <!-- ── HIGH ALERT OVERLAY (full-screen red blink) ──────────────────────────── -->
     <FrameLayout
         android:id="@+id/alertOverlay"
         android:layout_width="match_parent"
@@ -663,28 +876,38 @@
         android:focusable="true">
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:gravity="center"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp">
 
+            <!-- match_parent + textAlignment="center" (not just gravity="center" on the
+                 LinearLayout above) so that when the headline/message wraps to multiple lines,
+                 every line centers against the full screen width instead of each TextView sizing
+                 to its own widest line and only THAT box being centered — the previous
+                 wrap_content TextViews inside a wrap_content parent produced a ragged, off-center
+                 look whenever the text wrapped. -->
             <TextView
                 android:id="@+id/tvAlertTitle"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="🚨 CRITICAL ALERT"
                 android:textColor="#FFFFFF"
+                android:textAlignment="center"
                 android:textSize="32sp"
                 android:textStyle="bold"
                 android:layout_marginBottom="16dp"/>
 
             <TextView
                 android:id="@+id/tvAlertMessage"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="ACTION REQUIRED"
                 android:textColor="#FFFFFF"
+                android:textAlignment="center"
                 android:textSize="20sp"
                 android:layout_marginBottom="48dp"/>
 
@@ -692,6 +915,7 @@
                 android:id="@+id/btnDismissAlert"
                 android:layout_width="200dp"
                 android:layout_height="70dp"
+                android:layout_gravity="center_horizontal"
                 android:text="DISMISS"
                 android:backgroundTint="#FFFFFF"
                 android:textColor="#E53935"
@@ -700,5 +924,4 @@
                 app:cornerRadius="35dp"/>
         </LinearLayout>
     </FrameLayout>
-
 </FrameLayout>

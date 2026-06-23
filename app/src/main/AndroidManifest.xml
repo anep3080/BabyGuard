@@ -4,6 +4,7 @@
 
     <uses-feature android:name="android.hardware.camera" />
     <uses-feature android:name="android.hardware.camera.autofocus" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -13,15 +14,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -45,7 +43,14 @@
 
         <activity
             android:name=".CameraActivity"
-            android:exported="false" />
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_device_filter"/>
+        </activity>
 
         <activity
             android:name=".ParentActivity"
@@ -55,11 +60,20 @@
             android:name="preloaded_fonts"
             android:resource="@array/preloaded_fonts" />
 
+        <!-- specialUse (not dataSync): dataSync-type foreground services are subject to a
+             ~6-hour cumulative background runtime limit per 24h on modern Android, which would
+             silently kill overnight baby monitoring. specialUse has no such time limit and is
+             the documented escape hatch for long-running background work (alert relay + alarm
+             playback here) that doesn't cleanly fit the other predefined FGS types. -->
         <service
             android:name=".BabyGuardService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync"/>
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="baby_monitor_alert_relay"/>
+        </service>
 
     </application>
 </manifest>

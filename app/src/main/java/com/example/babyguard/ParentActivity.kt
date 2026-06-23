@@ -1,5 +1,6 @@
 package com.example.babyguard
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,6 +10,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -35,7 +37,6 @@ import androidx.core.content.ContextCompat
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
-import soup.neumorphism.NeumorphCardView
 import java.io.DataInputStream
 import java.net.ServerSocket
 import java.net.Socket
@@ -58,10 +59,17 @@ class ParentActivity : AppCompatActivity() {
     private lateinit var pbBabyBattery: ProgressBar
     private lateinit var tvBabyBatteryPct: TextView
     private lateinit var fabMic: FloatingActionButton
-    private lateinit var cardVideo: NeumorphCardView
-    private lateinit var cardSettings: androidx.cardview.widget.CardView
+    private lateinit var cardVideo: View
+    private lateinit var cardSettings: View
     private lateinit var tvInsightMood: TextView
     private lateinit var tvInsightPosture: TextView
+    // Tracks the last-seen (rotation-adjusted) frame dimensions purely to avoid re-laying-out
+    // videoContainer on every single frame when nothing has actually changed.
+    private var lastFrameEffW: Int = -1
+    private var lastFrameEffH: Int = -1
+    // Parent-only display rotation (0/90/180/270) of the live-view window itself — a pure local
+    // UI transform on videoContainer, never sent to the Baby Unit. Cumulative, wraps at 360.
+    private var liveViewWindowRotation = 0f
 
     private lateinit var switchMasterAlert: SwitchCompat
     private lateinit var switchMasterAlertQuick: SwitchCompat   // in live insights card
@@ -70,8 +78,23 @@ class ParentActivity : AppCompatActivity() {
     private lateinit var switchQuietHours: SwitchCompat
     private lateinit var tvQuietStart: TextView
     private lateinit var tvQuietEnd: TextView
-    private lateinit var seekAudioSens: SeekBar
-    private lateinit var tvAudioSensLabel: TextView
+    private lateinit var rowAlarmSound: View
+    private lateinit var tvAlarmSoundName: TextView
+
+    // Smooths soundMeter's progress updates (see updateSoundMeter) instead of snapping
+    // instantly on every ~5x/sec telemetry tick.
+    private var soundMeterAnimator: android.animation.ObjectAnimator? = null
+
+    // Result of RingtoneManager.ACTION_RINGTONE_PICKER, launched from rowAlarmSound.
+    private val ringtonePickerLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val uri = result.data?.getParcelableExtra<android.net.Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            prefs.alarmSoundUri = uri?.toString() ?: ""
+            refreshAlarmSoundLabel()
+        }
+    }
 
     private lateinit var alertOverlay: FrameLayout
     private lateinit var tvAlertMessage: TextView
@@ -82,19 +105,15 @@ class ParentActivity : AppCompatActivity() {
     private lateinit var dbHelper: AlertDatabaseHelper
     private val recorder by lazy { VideoRecorder(this) }
 
-    // ── Log deduplication ─────────────────────────────────────────────────────
-    // Tracks (tier-action → last log timestamp) so repeated identical events
-    // don't spam the history card.
-    private val lastLoggedAt = mutableMapOf<String, Long>()
-    private val LOG_COOLDOWN = mapOf("HIGH" to 300_000L, "MEDIUM" to 120_000L, "LOW" to 600_000L)
+    // NOTE: alert firing/cooldowns/logging now live in BabyGuardService — it's the only
+    // piece reliably alive when the screen is off or the app is backgrounded. This Activity
+    // only refreshes UI in response to the broadcast (see dataReceiver below).
+
     private var recorderStarted = false
 
-    private var activeRingtone: Ringtone? = null
     private var latestStreamFrame: Bitmap? = null
     private var isRecording = false
-    private var lastAcknowledgeTime = 0L
     private var currentMotionLevel = 0f
-    private var currentSoundLevel = 0f
 
     private var isVideoPlaying = false
     private var videoServerSocket: ServerSocket? = null
@@ -107,17 +126,13 @@ class ParentActivity : AppCompatActivity() {
     private var audioClient: Socket? = null
 
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val motionDecayRunnable = object : Runnable {
+    // Motion meter: smooth decay — reflects peak and slides down gracefully.
+    private val soundDecayRunnable = object : Runnable {
         override fun run() {
             if (currentMotionLevel > 0) {
-                currentMotionLevel *= 0.94f
+                currentMotionLevel *= 0.94f // Slowly spring back to zero
                 if (currentMotionLevel < 1) currentMotionLevel = 0f
                 motionMeter.progress = currentMotionLevel.toInt()
-            }
-            if (currentSoundLevel > 0) {
-                currentSoundLevel *= 0.92f
-                if (currentSoundLevel < 1) currentSoundLevel = 0f
-                soundMeter.progress = currentSoundLevel.toInt()
             }
             handler.postDelayed(this, 30)
         }
@@ -126,67 +141,47 @@ class ParentActivity : AppCompatActivity() {
     // ── Telemetry receiver ─────────────────────────────────────────────────────
     private val dataReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "BABYGUARD_HIGH_ALERT") {
+                showActiveAlert(intent.getStringExtra("headline")
+                    ?: "Check on baby — unusual activity detected")
+                return
+            }
+            if (intent?.action == "BABYGUARD_CMD_RESULT") {
+                val cmdSucceeded = intent.getBooleanExtra("success", true)
+                if (!cmdSucceeded) {
+                    Toast.makeText(this@ParentActivity,
+                        "Baby Unit not connected — command not sent", Toast.LENGTH_LONG).show()
+                }
+                return
+            }
             val jsonString = intent?.getStringExtra("payload") ?: return
             try {
                 val json   = org.json.JSONObject(jsonString)
-                val status = json.optString("status", "---")
                 val mood   = json.optString("mood", "Calm")
                 val posture = json.optString("posture", "Safe")
-                val tier   = json.optString("tier", "LOW")
-                val action = json.optString("event_action", "Normal")
-                val image  = json.optString("image", "")
 
                 tvInsightMood.text    = mood
                 tvInsightPosture.text = posture
 
-                // Peak-hold: immediately snap the bar to the new value so the UI
-                // responds at once; the decay runnable then gradually pulls it back.
+                // Motion meter: peak-hold + decay (decay runnable handles the fall-off).
                 val newMotion = json.optInt("motion_level", 0).toFloat()
                 if (newMotion > currentMotionLevel) {
                     currentMotionLevel = newMotion
                     motionMeter.progress = newMotion.toInt()
                 }
-                val newSound = json.optInt("sound_level", 0).toFloat()
-                if (newSound > currentSoundLevel) {
-                    currentSoundLevel = newSound
-                    soundMeter.progress = newSound.toInt()
-                }
 
-                val masterOn = switchMasterAlert.isChecked
-                val canTriggerHigh = System.currentTimeMillis() - lastAcknowledgeTime > 60_000
+                // Sound meter — already arrives ~5x/sec from the Baby Unit's telemetry tick, so
+                // unlike motion it doesn't need its own peak-hold/decay runnable. The jump
+                // between ticks is animated (see updateSoundMeter) so the needle glides instead
+                // of snapping on every update.
+                updateSoundMeter(json.optInt("sound_level", 0))
 
-                // Sound-level alert: fire HIGH if baby sounds exceed sensitivity threshold
-                val soundThreshold = prefs.audioAlertSensitivity
-                val soundTriggered = json.optInt("sound_level", 0) >= soundThreshold &&
-                                     json.optBoolean("is_crying", false)
-
-                if (masterOn) {
-                    when {
-                        tier == "HIGH" && canTriggerHigh   -> triggerHighAlert(action, status)
-                        soundTriggered && canTriggerHigh   -> triggerHighAlert("Crying", status)
-                        tier == "MEDIUM" && switchMediumAlert.isChecked -> triggerMediumAlert(status)
-                    }
-                }
-
-                val shouldLog = when (tier) {
-                    "HIGH"   -> true
-                    "MEDIUM" -> switchMediumAlert.isChecked
-                    "LOW"    -> switchLowAlert.isChecked
-                    else     -> false
-                }
-                // Deduplication: same tier+action must wait cooldown before logging again
-                val logKey      = "$tier-$action"
-                val cooldown    = LOG_COOLDOWN[tier] ?: 300_000L
-                val lastLogged  = lastLoggedAt[logKey] ?: 0L
-                val dedupPassed = System.currentTimeMillis() - lastLogged > cooldown
-
-                if (shouldLog && dedupPassed && (image.isNotEmpty() || tier != "LOW")) {
-                    lastLoggedAt[logKey] = System.currentTimeMillis()
-                    val ts = java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-                        .format(java.util.Date())
-                    dbHelper.saveAlert(ts, status, image, tier, action)
-                    loadHistoryToUI()
-                }
+                // Alert firing/cooldowns and the actual dbHelper.saveAlert(...) write now
+                // happen inside BabyGuardService (the only piece reliably alive when the
+                // screen is off). The Service tells us via this extra whether it just
+                // logged a new History entry, so we only refresh the list when needed.
+                val loggedNow = intent.getBooleanExtra("loggedNow", false)
+                if (loggedNow) loadHistoryToUI()
 
                 val battery = json.optInt("battery", -1)
                 if (battery != -1) {
@@ -198,7 +193,19 @@ class ParentActivity : AppCompatActivity() {
                 if (pairingLayout.visibility == View.VISIBLE) {
                     pairingLayout.visibility  = View.GONE
                     dashboardLayout.visibility = View.VISIBLE
+                    // Soft-UI pop: the neumorphic Live Insights / Log section
+                    // springs in rather than just appearing instantly.
+                    dashboardLayout.scaleX = 0.9f
+                    dashboardLayout.scaleY = 0.9f
+                    dashboardLayout.alpha = 0f
+                    dashboardLayout.animate()
+                        .scaleX(1f).scaleY(1f).alpha(1f)
+                        .setDuration(320L)
+                        .setInterpolator(android.view.animation.OvershootInterpolator(1.4f))
+                        .start()
                     tvSubtitle.text = "🟢 Connected Securely"
+                    // Reveal action FABs now that we are connected
+                    updateFabVisibility(connected = true)
                 }
             } catch (_: Exception) {}
         }
@@ -209,7 +216,12 @@ class ParentActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_parent)
-        stopService(Intent(this, BabyGuardService::class.java))
+        // NOTE: do NOT stopService() here first. BabyGuardService holds the only live socket to
+        // the Baby Unit; stopping it on every onCreate (e.g. every time the notification is
+        // tapped to reopen the app) killed that connection and forced a multi-second reconnect,
+        // during which the dashboard had no data to show and fell back to the QR pairing screen
+        // even though the Baby Unit was already connected. startForegroundService() is safe to
+        // call when the service is already running — it just re-delivers onStartCommand.
         ContextCompat.startForegroundService(this, Intent(this, BabyGuardService::class.java))
 
         prefs    = AppPreferences(this)
@@ -222,7 +234,47 @@ class ParentActivity : AppCompatActivity() {
         createNotificationChannel()
         generateLanQrCode()
         loadHistoryToUI()
-        handler.post(motionDecayRunnable)
+        handler.post(soundDecayRunnable)
+
+        // Without this, the heads-up notification (and the in-app dismiss overlay's reach via
+        // tapping it) never appears — NotificationManager.notify() silently no-ops without
+        // POST_NOTIFICATIONS on Android 13+.
+        requestNotificationPermissionIfNeeded()
+        // Many OEMs (Samsung's "Sleeping apps" / adaptive battery in particular) kill backgrounded
+        // foreground services anyway despite the foreground-service contract, which would silently
+        // stop alert delivery once the parent minimizes the app. Asking to be exempted from
+        // battery optimization makes that far less likely.
+        requestBatteryOptimizationExemptionIfNeeded()
+    }
+
+    // ── Alert delivery permissions ───────────────────────────────────────────────
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2001)
+        }
+    }
+
+    /**
+     * Prompts (once per launch, only if not already exempted) to whitelist the app from battery
+     * optimization, so BabyGuardService — which must keep its socket + alarm playback alive while
+     * the Parent app is minimized or the screen is off — isn't killed by OEM background restrictions.
+     */
+    private fun requestBatteryOptimizationExemptionIfNeeded() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                })
+            }
+        } catch (_: Exception) {
+            // Some OEM ROMs restrict/ignore this intent — not fatal, just less reliable in the background.
+        }
     }
 
     private fun bindViews() {
@@ -241,8 +293,8 @@ class ParentActivity : AppCompatActivity() {
         fabMic          = findViewById(R.id.fabMic)
         cardVideo       = findViewById(R.id.cardVideo)
         cardSettings    = findViewById(R.id.cardSettings)
-        tvInsightMood   = findViewById(R.id.tvInsightMood)
-        tvInsightPosture = findViewById(R.id.tvInsightPosture)
+        tvInsightMood        = findViewById(R.id.tvInsightMood)
+        tvInsightPosture     = findViewById(R.id.tvInsightPosture)
 
         switchMasterAlert      = findViewById(R.id.switchMasterAlert)
         switchMasterAlertQuick = findViewById(R.id.switchMasterAlertQuick)
@@ -251,8 +303,8 @@ class ParentActivity : AppCompatActivity() {
         switchQuietHours       = findViewById(R.id.switchQuietHours)
         tvQuietStart           = findViewById(R.id.tvQuietStart)
         tvQuietEnd             = findViewById(R.id.tvQuietEnd)
-        seekAudioSens          = findViewById(R.id.seekAudioSens)
-        tvAudioSensLabel       = findViewById(R.id.tvAudioSensLabel)
+        rowAlarmSound          = findViewById(R.id.rowAlarmSound)
+        tvAlarmSoundName       = findViewById(R.id.tvAlarmSoundName)
 
         alertOverlay    = findViewById(R.id.alertOverlay)
         tvAlertMessage  = findViewById(R.id.tvAlertMessage)
@@ -269,10 +321,22 @@ class ParentActivity : AppCompatActivity() {
         switchQuietHours.isChecked       = prefs.quietHoursEnabled
         tvQuietStart.text = formatHour(prefs.quietHoursStart)
         tvQuietEnd.text   = formatHour(prefs.quietHoursEnd)
+        refreshAlarmSoundLabel()
+    }
 
-        val savedSens = prefs.audioAlertSensitivity
-        seekAudioSens.progress = savedSens
-        tvAudioSensLabel.text  = "Alert when: ≥ $savedSens%"
+    /** Resolves the saved alarm-sound URI (if any) to its display title via RingtoneManager. */
+    private fun refreshAlarmSoundLabel() {
+        val uriStr = prefs.alarmSoundUri
+        tvAlarmSoundName.text = if (uriStr.isBlank()) {
+            "Default Alarm Sound"
+        } else {
+            try {
+                RingtoneManager.getRingtone(this, android.net.Uri.parse(uriStr))
+                    ?.getTitle(this) ?: "Default Alarm Sound"
+            } catch (_: Exception) {
+                "Default Alarm Sound"
+            }
+        }
     }
 
     private fun setupListeners() {
@@ -291,16 +355,6 @@ class ParentActivity : AppCompatActivity() {
         switchLowAlert.setOnCheckedChangeListener    { _, v -> prefs.lowAlertEnabled    = v }
         switchQuietHours.setOnCheckedChangeListener  { _, v -> prefs.quietHoursEnabled  = v }
 
-        // Audio sensitivity SeekBar
-        seekAudioSens.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                tvAudioSensLabel.text  = "Alert when: ≥ $p%"
-                if (fromUser) prefs.audioAlertSensitivity = p
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?)  {}
-        })
-
         // Quiet hours time pickers
         tvQuietStart.setOnClickListener {
             TimePickerDialog(this, { _, h, _ ->
@@ -315,23 +369,70 @@ class ParentActivity : AppCompatActivity() {
             }, prefs.quietHoursEnd, 0, true).show()
         }
 
-        // FABs
-        findViewById<FloatingActionButton>(R.id.fabVideo).setOnClickListener {
-            showCard(cardVideo, R.anim.slide_down); startVideoServer()
+        // High Alert sound — opens the system ringtone picker scoped to alarm sounds.
+        // The result comes back through ringtonePickerLauncher above.
+        rowAlarmSound.setOnClickListener {
+            val current = prefs.alarmSoundUri.takeIf { it.isNotBlank() }
+                ?.let { android.net.Uri.parse(it) }
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            val pickerIntent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select High Alert Sound")
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM))
+                putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, current)
+            }
+            ringtonePickerLauncher.launch(pickerIntent)
+        }
+
+        // FABs — toggle on repeated tap; hidden during pairing, shown after connection
+        val fabVideo = findViewById<FloatingActionButton>(R.id.fabVideo)
+        fabVideo.setOnClickListener {
+            if (cardVideo.visibility == View.VISIBLE) {
+                hideCard(cardVideo, R.anim.spring_out)
+                stopVideoServer()
+            } else {
+                showCard(cardVideo, R.anim.slide_up_spring)
+                startVideoServer()
+            }
         }
         findViewById<FloatingActionButton>(R.id.fabSettings).setOnClickListener {
-            showCard(cardSettings, R.anim.slide_in_right)
+            if (cardSettings.visibility == View.VISIBLE) {
+                hideCard(cardSettings, R.anim.spring_out)
+            } else {
+                showCard(cardSettings, R.anim.slide_in_right_spring)
+            }
         }
         fabMic.setOnClickListener { if (isMicListening) stopAudioListening() else startAudioListening() }
 
+        // Hide camera/mic FABs while on the QR pairing screen
+        updateFabVisibility(connected = pairingLayout.visibility != View.VISIBLE)
+
+        // Pairing action — regenerate the LAN QR code (sole pairing method)
+        findViewById<android.widget.Button>(R.id.btnPairQr).setOnClickListener {
+            val tvHint = findViewById<TextView>(R.id.tvPairingHint)
+            tvHint.text = "⚠️ Ensure both devices are on the same WiFi network."
+            tvHint.setTextColor(Color.parseColor("#CC7000"))
+            generateLanQrCode()
+        }
+
         // Toolbar buttons
         findViewById<ImageButton>(R.id.btnCloseVideo).setOnClickListener {
-            hideCard(cardVideo, R.anim.slide_out_up); stopVideoServer()
+            hideCard(cardVideo, R.anim.spring_out); stopVideoServer()
         }
         findViewById<ImageButton>(R.id.btnCloseSettings).setOnClickListener {
-            hideCard(cardSettings, R.anim.slide_out_right)
+            hideCard(cardSettings, R.anim.spring_out)
         }
         findViewById<ImageButton>(R.id.btnMainBack).setOnClickListener { finish() }
+
+        // Manual reconnect — for when the Baby Unit looks "connected" here but commands keep
+        // failing (a stale TCP connection neither side noticed died). Forces the Parent's socket
+        // closed so the Baby Unit's writer detects it and redials within ~2s.
+        findViewById<ImageButton>(R.id.btnReconnect).setOnClickListener {
+            sendBroadcast(Intent("BABYGUARD_RECONNECT").setPackage(packageName))
+            Toast.makeText(this, "Reconnecting to Baby Unit...", Toast.LENGTH_SHORT).show()
+        }
 
         // Settings actions
         findViewById<Button>(R.id.btnClearLog).setOnClickListener {
@@ -342,9 +443,93 @@ class ParentActivity : AppCompatActivity() {
         // Video panel actions
         findViewById<ImageButton>(R.id.btnCapture).setOnClickListener { captureCurrentFrame() }
         findViewById<ImageButton>(R.id.btnRecord).setOnClickListener { toggleStreamRecording() }
+
+        // Video rotation button — purely local to the Parent now: it rotates the live-view
+        // window (videoContainer) itself on screen, with no command sent to the Baby Unit. The
+        // Baby Unit no longer has any rotation concept at all; this just changes how the Parent
+        // displays whatever it receives. Scaled down on 90°/270° steps so the rotated window
+        // still fits within its original on-screen footprint instead of overflowing.
+        findViewById<ImageButton>(R.id.btnRotateVideo).setOnClickListener {
+            liveViewWindowRotation = (liveViewWindowRotation + 90f) % 360f
+
+            // Canvas-level rotation now (see drawFrameAspectFit) — the SurfaceView/container is
+            // never transformed or scaled, so there's no stretching. Just re-fit the container's
+            // box shape for the new rotation and force-redraw the last frame immediately instead
+            // of waiting for the next incoming frame.
+            latestStreamFrame?.let { frame ->
+                applyVideoContainerAspect(frame.width, frame.height, force = true)
+                val holder = svLiveVideo.holder
+                val canvas = holder.lockCanvas()
+                if (canvas != null) {
+                    drawFrameAspectFit(canvas, frame, svLiveVideo.width, svLiveVideo.height)
+                    holder.unlockCanvasAndPost(canvas)
+                }
+            }
+
+            // Camera-app-style feedback: spin the button icon to acknowledge the tap
+            it.animate()
+                .rotationBy(90f)
+                .setDuration(280L)
+                .setInterpolator(android.view.animation.OvershootInterpolator(1.2f))
+                .start()
+        }
+
+    }
+
+    /**
+     * Reshapes the live-view window (videoContainer) to match the actual aspect ratio of the
+     * incoming frame — using the frame's *exact* width:height (not a snapped-to-16:9/9:16
+     * guess), so the box always matches whatever the Baby Unit is really sending. This is what
+     * makes internal-camera mode match the Baby Unit's actual camera aspect: whatever ratio its
+     * CameraX preview captures at is exactly what gets requested here, frame by frame — no
+     * hardcoded assumption about phone camera shape. Independent of the Parent-only rotate
+     * button (which rotates the whole window as a display transform, see btnRotateVideo); this
+     * just follows whatever shape the raw frame arrives in.
+     */
+    private fun applyVideoContainerAspect(bmpWidth: Int, bmpHeight: Int, force: Boolean = false) {
+        // When the live view is rotated 90/270, the rotated content's effective shape is the
+        // bitmap's dimensions swapped — the container needs to match that swapped shape, not the
+        // raw (unrotated) bitmap shape, or the box ends up the wrong shape for what gets drawn.
+        val rotated = liveViewWindowRotation == 90f || liveViewWindowRotation == 270f
+        val effW = if (rotated) bmpHeight else bmpWidth
+        val effH = if (rotated) bmpWidth else bmpHeight
+        if (effW <= 0 || effH <= 0) return
+        if (!force && effW == lastFrameEffW && effH == lastFrameEffH) return
+        lastFrameEffW = effW; lastFrameEffH = effH
+        val container = findViewById<androidx.cardview.widget.CardView>(R.id.videoContainer) ?: return
+        val lp = container.layoutParams as? androidx.constraintlayout.widget.ConstraintLayout.LayoutParams ?: return
+        lp.dimensionRatio = "H,$effW:$effH"
+        container.layoutParams = lp
     }
 
     private fun formatHour(h: Int) = String.format(Locale.getDefault(), "%02d:00", h)
+
+    /**
+     * Smoothly animates soundMeter's progress to [target] instead of snapping instantly —
+     * the raw sound_level value still updates ~5x/sec, but the SeekBar glides between
+     * readings so the meter doesn't look jittery. Cancels any in-flight animation first so
+     * rapid successive ticks don't stack up and lag behind the latest reading.
+     */
+    private fun updateSoundMeter(target: Int) {
+        soundMeterAnimator?.cancel()
+        soundMeterAnimator = android.animation.ObjectAnimator.ofInt(soundMeter, "progress", soundMeter.progress, target).apply {
+            duration = 180L
+            interpolator = android.view.animation.DecelerateInterpolator()
+            start()
+        }
+    }
+
+    /**
+     * Show the video + mic FABs only when connected (not during the QR pairing screen).
+     * The settings FAB is always visible so users can clear the log or adjust preferences
+     * even before pairing.
+     */
+    private fun updateFabVisibility(connected: Boolean) {
+        val v = if (connected) View.VISIBLE else View.GONE
+        findViewById<FloatingActionButton>(R.id.fabVideo)?.visibility = v
+        fabMic.visibility = v
+        // fabSettings always visible
+    }
 
     // ── Photo / Video capture ──────────────────────────────────────────────────
 
@@ -388,7 +573,7 @@ class ParentActivity : AppCompatActivity() {
             Toast.makeText(this, "Recording started", Toast.LENGTH_SHORT).show()
         } else {
             btn.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                Color.parseColor("#80000000"))
+                Color.parseColor("#D3D3D3"))
             if (recorderStarted) {
                 Thread { recorder.stop() }.start()   // stop off main thread (encoder drain)
                 recorderStarted = false
@@ -398,63 +583,58 @@ class ParentActivity : AppCompatActivity() {
     }
 
     // ── Alert handling ─────────────────────────────────────────────────────────
+    // Firing/cooldowns/notifications now live in BabyGuardService — this Activity no
+    // longer decides whether to alert, only whether to reset stray overlay state.
 
-    private fun triggerHighAlert(action: String, status: String) {
-        if (alertOverlay.visibility == View.VISIBLE) return
-        runOnUiThread {
+    /**
+     * Shows the in-app dismiss overlay — the ONLY place a HIGH-tier alert now surfaces a "screen"
+     * for the parent. Replaces the old system-wide full-screen AlarmActivity, which used to pop
+     * over whatever app the parent was using. If the app isn't foregrounded when the alert fires,
+     * vibration/ringtone/notification (from BabyGuardService) are how the parent finds out;
+     * opening the Parent Unit screen then calls this via the onResume() sync below.
+     */
+    private fun showActiveAlert(headline: String) {
+        tvAlertMessage.text = headline
+        if (alertOverlay.visibility != View.VISIBLE) {
             alertOverlay.visibility = View.VISIBLE
-            tvAlertMessage.text = formatAlertHeadline(action)
-            val blink = AlphaAnimation(1.0f, 0.2f).apply {
-                duration = 400; repeatMode = Animation.REVERSE
-                repeatCount = Animation.INFINITE
-            }
-            alertOverlay.startAnimation(blink)
+            alertOverlay.alpha = 0f
+            alertOverlay.animate().alpha(1f).setDuration(250L).start()
         }
-        (getSystemService(Context.VIBRATOR_SERVICE) as Vibrator)
-            .vibrate(longArrayOf(0, 500, 250, 500), 0)
-        activeRingtone = RingtoneManager.getRingtone(
-            this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)).apply { play() }
-        showSystemNotification("🚨 CRITICAL ALERT", "$action - Check Baby!", 2)
-    }
-
-    private fun triggerMediumAlert(status: String) {
-        // Suppress medium alerts during quiet hours
-        if (prefs.quietHoursEnabled && prefs.isQuietHoursActive()) {
-            Log.d("BabyGuard", "Medium alert suppressed by quiet hours: $status")
-            return
-        }
-        (getSystemService(Context.VIBRATOR_SERVICE) as Vibrator).vibrate(500)
-        showSystemNotification("Baby Update", status, 1)
     }
 
     private fun dismissActiveAlert() {
-        lastAcknowledgeTime = System.currentTimeMillis()
-        runOnUiThread { alertOverlay.visibility = View.GONE; alertOverlay.clearAnimation() }
-        activeRingtone?.stop()
-        (getSystemService(Context.VIBRATOR_SERVICE) as Vibrator).cancel()
-    }
-
-    private fun showSystemNotification(title: String, message: String, priority: Int) {
-        val pending = android.app.PendingIntent.getActivity(
-            this, 0, Intent(this, ParentActivity::class.java),
-            android.app.PendingIntent.FLAG_IMMUTABLE)
-        val builder = NotificationCompat.Builder(this, "BABYGUARD_ALERTS")
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setPriority(if (priority == 2) 2 else 0)
-            .setAutoCancel(true)
-            .setContentIntent(pending)
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(priority, builder.build())
+        alertOverlay.visibility = View.GONE
+        alertOverlay.clearAnimation()
+        // Tells BabyGuardService to stop the ringtone/vibration and cancel the notification —
+        // mirrors what AlarmActivity's dismiss button used to do.
+        sendBroadcast(Intent("BABYGUARD_ACK").setPackage(packageName))
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                .createNotificationChannel(
-                    NotificationChannel("BABYGUARD_ALERTS", "Alerts",
-                        NotificationManager.IMPORTANCE_HIGH))
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // HIGH: max importance — heads-up notification with sound
+            nm.createNotificationChannel(
+                NotificationChannel("BABYGUARD_HIGH", "Critical Alerts",
+                    NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Immediate alerts requiring action"
+                    enableVibration(true)
+                    setShowBadge(true)
+                })
+            // MEDIUM: default importance — shows in shade with sound
+            nm.createNotificationChannel(
+                NotificationChannel("BABYGUARD_MEDIUM", "Baby Updates",
+                    NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "Medium-priority baby activity updates"
+                    setShowBadge(true)
+                })
+            // LOW: silent badge only — no sound/vibration
+            nm.createNotificationChannel(
+                NotificationChannel("BABYGUARD_LOW", "Baby Activity",
+                    NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Low-priority informational updates"
+                    setShowBadge(false)
+                })
         }
     }
 
@@ -489,21 +669,17 @@ class ParentActivity : AppCompatActivity() {
         tier == "HIGH"   && eventAction == "Face Down"   -> "Baby rolled face-down — airways may be blocked"
         tier == "HIGH"   && eventAction == "Crying"      -> "Sustained crying — baby needs attention"
         tier == "HIGH"   && eventAction == "Suffocation" -> "Baby's face hidden for 5+ seconds — check now"
+        tier == "HIGH"   && eventAction == "Possible Interference" -> "Unexpected presence detected — baby's motion stopped"
         tier == "HIGH"                                   -> "Critical event — check on baby immediately"
         tier == "MEDIUM" && eventAction == "Fussy"       -> "Baby appears fussy or unsettled"
+        tier == "MEDIUM" && eventAction == "Face Covered" -> "Baby's face just became covered — early warning"
+        tier == "MEDIUM" && eventAction == "Restless"    -> "Baby is restless — sustained movement detected"
+        tier == "MEDIUM" && eventAction == "Crying Started" -> "Baby has started crying"
+        tier == "MEDIUM" && eventAction == "Extra Presence" -> "Someone or something else entered the frame"
         tier == "MEDIUM"                                 -> "Baby needs attention"
         eventAction == "Active"                          -> "Baby is awake and moving around"
         eventAction == "Sleeping"                        -> "Baby is resting peacefully"
         else                                             -> "Baby is being monitored"
-    }
-
-    /** Short one-line message for the full-screen alert overlay. */
-    private fun formatAlertHeadline(action: String): String = when (action) {
-        "Standing"    -> "Baby is standing — risk of falling from crib"
-        "Face Down"   -> "Baby rolled face-down — check airways now"
-        "Crying"      -> "Baby has been crying — needs attention"
-        "Suffocation" -> "Baby's face hidden for 5 seconds — check immediately"
-        else          -> "Check on baby — unusual activity detected"
     }
 
     // ── History log ────────────────────────────────────────────────────────────
@@ -517,55 +693,86 @@ class ParentActivity : AppCompatActivity() {
             return
         }
         tvEmptyLog.visibility = View.GONE
-        for (alert in alerts) {
-            val card = androidx.cardview.widget.CardView(this).apply {
-                radius = 24f; setCardBackgroundColor(Color.WHITE); cardElevation = 4f
-                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 24) }
-            }
-            val content = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; setPadding(32, 32, 32, 32)
-            }
-            val textLayout = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-            }
+        val inflater = layoutInflater
+        for ((index, alert) in alerts.withIndex()) {
+            val card = inflater.inflate(R.layout.item_log_entry, llAlertHistory, false)
+
             val (iconEmoji, accentColor) = when (alert.tier) {
-                "HIGH"   -> "🚨" to "#E53935"
-                "MEDIUM" -> "⚠️" to "#FB8C00"
-                else     -> "✅" to "#43A047"
+                "HIGH"   -> "🚨" to "#FF6B6B"
+                "MEDIUM" -> "⚠️" to "#FFB347"
+                else     -> "✅" to "#00D4AA"
             }
-            // Row 1: icon + timestamp + tier badge
-            textLayout.addView(TextView(this).apply {
+            card.findViewById<TextView>(R.id.tvLogHeader).apply {
                 text = "$iconEmoji  ${alert.timestamp}"
                 setTextColor(Color.parseColor(accentColor))
-                textSize = 15f
-                setTypeface(null, android.graphics.Typeface.BOLD)
-            })
-            // Row 2: clean human-readable description
-            textLayout.addView(TextView(this).apply {
-                text = formatEventDescription(alert.tier, alert.eventAction)
-                setTextColor(Color.parseColor("#444444"))
-                textSize = 14f
-                setPadding(0, 6, 0, 0)
-            })
-            content.addView(textLayout)
+            }
+            card.findViewById<TextView>(R.id.tvLogDesc).text =
+                formatEventDescription(alert.tier, alert.eventAction)
+
             // Thumbnail (HIGH alerts only — they include a snapshot)
             if (alert.imageBase64.isNotEmpty()) {
                 try {
                     val bytes = android.util.Base64.decode(alert.imageBase64, 0)
                     val bmp   = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    val iv = ImageView(this).apply {
-                        setImageBitmap(bmp)
-                        layoutParams = LinearLayout.LayoutParams(180, 180)
-                        scaleType = ImageView.ScaleType.CENTER_CROP
-                    }
-                    content.addView(androidx.cardview.widget.CardView(this).apply {
-                        radius = 16f; addView(iv)
-                    })
+                    card.findViewById<ImageView>(R.id.ivLogThumb).setImageBitmap(bmp)
+                    card.findViewById<View>(R.id.cardLogThumb).visibility = View.VISIBLE
                 } catch (_: Exception) {}
             }
-            card.addView(content)
+
             llAlertHistory.addView(card)
+            popInLogEntry(card, index)
+        }
+    }
+
+    /**
+     * Soft "pops out" entrance for a freshly-added neumorphic log card: starts
+     * slightly scaled-down/transparent and springs up to full size, giving the
+     * card a soft-UI feel rather than just appearing instantly.
+     */
+    private fun popInLogEntry(card: View, index: Int) {
+        card.scaleX = 0.85f
+        card.scaleY = 0.85f
+        card.alpha = 0f
+        card.animate()
+            .scaleX(1f).scaleY(1f).alpha(1f)
+            .setStartDelay((index * 40L).coerceAtMost(200L))
+            .setDuration(260L)
+            .setInterpolator(android.view.animation.OvershootInterpolator(1.6f))
+            .start()
+    }
+
+    /**
+     * Draws [bmp] into [canvas] scaled to fit inside ([viewW] x [viewH]) while preserving the
+     * bitmap's aspect ratio — letterboxing instead of stretching. Rotation (from the Parent's
+     * rotate button) is applied here at the canvas level, not as a View transform — rotating the
+     * SurfaceView/container itself (the old approach) required a compensating non-uniform scale
+     * to avoid overflow, which is exactly what stretched the picture. Rotating the canvas instead
+     * keeps every pixel at 1:1 scale; only the fit box's width/height are swapped for 90/270 so
+     * the aspect-fit math accounts for the rotated coordinate frame.
+     */
+    private fun drawFrameAspectFit(canvas: android.graphics.Canvas, bmp: Bitmap, viewW: Int, viewH: Int) {
+        canvas.drawColor(Color.BLACK)
+        if (viewW <= 0 || viewH <= 0) return
+        val rotated = liveViewWindowRotation == 90f || liveViewWindowRotation == 270f
+        val fitW = if (rotated) viewH else viewW
+        val fitH = if (rotated) viewW else viewH
+        val bw = bmp.width.toFloat()
+        val bh = bmp.height.toFloat()
+        val scale = minOf(fitW / bw, fitH / bh)
+        val drawW = bw * scale
+        val drawH = bh * scale
+        val cx = viewW / 2f
+        val cy = viewH / 2f
+        val dst = android.graphics.RectF(
+            cx - drawW / 2f, cy - drawH / 2f,
+            cx + drawW / 2f, cy + drawH / 2f)
+        if (liveViewWindowRotation != 0f) {
+            canvas.save()
+            canvas.rotate(liveViewWindowRotation, cx, cy)
+            canvas.drawBitmap(bmp, null, dst, null)
+            canvas.restore()
+        } else {
+            canvas.drawBitmap(bmp, null, dst, null)
         }
     }
 
@@ -602,14 +809,13 @@ class ParentActivity : AppCompatActivity() {
                                     reusable = bmp
                                     latestStreamFrame = bmp
 
-                                    // Draw frame to SurfaceView
+                                    runOnUiThread { applyVideoContainerAspect(bmp.width, bmp.height) }
+
+                                    // Draw frame to SurfaceView — aspect-fit, never stretched.
                                     val holder = svLiveVideo.holder
                                     val canvas  = holder.lockCanvas()
                                     if (canvas != null) {
-                                        canvas.drawColor(Color.BLACK)
-                                        canvas.drawBitmap(bmp, null,
-                                            android.graphics.Rect(0, 0,
-                                                svLiveVideo.width, svLiveVideo.height), null)
+                                        drawFrameAspectFit(canvas, bmp, svLiveVideo.width, svLiveVideo.height)
                                         holder.unlockCanvasAndPost(canvas)
                                     }
 
@@ -639,7 +845,7 @@ class ParentActivity : AppCompatActivity() {
             runOnUiThread {
                 val btn = findViewById<ImageButton>(R.id.btnRecord)
                 btn?.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    Color.parseColor("#80000000"))
+                    Color.parseColor("#D3D3D3"))
             }
         }
         isVideoPlaying = false
@@ -659,8 +865,9 @@ class ParentActivity : AppCompatActivity() {
                 audioServerSocket = ServerSocket(8890).apply { reuseAddress = true }
                 while (isMicListening) {
                     audioClient = audioServerSocket!!.accept()
-                    val dis = DataInputStream(audioClient!!.inputStream)
+                    val dis   = DataInputStream(audioClient!!.inputStream)
                     val bSize = android.media.AudioTrack.getMinBufferSize(16000, 4, 2)
+                        .coerceAtLeast(1600)  // min ~100ms buffer
                     val track = android.media.AudioTrack(3, 16000, 4, 2, bSize, 1).apply { play() }
                     val buf = ShortArray(bSize)
                     while (isMicListening && !audioClient!!.isClosed) {
@@ -679,67 +886,100 @@ class ParentActivity : AppCompatActivity() {
         isMicListening = false
         fabMic.imageTintList =
             android.content.res.ColorStateList.valueOf(Color.parseColor("#888888"))
-        audioClient?.close(); audioServerSocket?.close()
-        audioClient = null; audioServerSocket = null
+        audioClient?.close()
+        audioServerSocket?.close()
+        audioServerThread?.interrupt()
     }
 
-    // ── QR code ────────────────────────────────────────────────────────────────
+    // ── QR code (LAN pairing) ──────────────────────────────────────────────────
 
     private fun generateLanQrCode() {
+        val ip = getLocalIpAddress() ?: run {
+            // Crisp vector icon instead of the low-res raster ic_dialog_alert,
+            // which looked blurry when stretched to the 250dp QR-code slot.
+            ivQrCode.setImageResource(R.drawable.ic_alert_sharp)
+            ivQrCode.scaleType = ImageView.ScaleType.CENTER_INSIDE
+            return
+        }
+        val qrText = "babyguard://connect?ip=$ip&port=8888"
         try {
-            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val ip   = wifi.connectionInfo.ipAddress
-            if (ip == 0) return
-            showQrCode("LAN:" + String.format(Locale.US,
-                "%d.%d.%d.%d", ip and 0xff, ip shr 8 and 0xff,
-                ip shr 16 and 0xff, ip shr 24 and 0xff))
-        } catch (_: Exception) {}
+            val size = 512
+            val hints = mapOf(com.google.zxing.EncodeHintType.MARGIN to 1)
+            val bits  = QRCodeWriter().encode(
+                qrText, BarcodeFormat.QR_CODE, size, size, hints)
+            val bmp = android.graphics.Bitmap.createBitmap(size, size,
+                android.graphics.Bitmap.Config.RGB_565)
+            for (x in 0 until size)
+                for (y in 0 until size)
+                    bmp.setPixel(x, y, if (bits[x, y]) Color.BLACK else Color.WHITE)
+            ivQrCode.scaleType = ImageView.ScaleType.FIT_CENTER
+            ivQrCode.setImageBitmap(bmp)
+        } catch (_: Exception) {
+            ivQrCode.setImageResource(R.drawable.ic_alert_sharp)
+            ivQrCode.scaleType = ImageView.ScaleType.CENTER_INSIDE
+        }
     }
 
-    private fun showQrCode(tag: String) {
-        runOnUiThread {
-            try {
-                val bit = QRCodeWriter().encode(tag, BarcodeFormat.QR_CODE, 512, 512)
-                val bmp = Bitmap.createBitmap(512, 512, Bitmap.Config.RGB_565)
-                for (x in 0 until 512) for (y in 0 until 512)
-                    bmp.setPixel(x, y, if (bit.get(x, y)) Color.BLACK else Color.WHITE)
-                ivQrCode.setImageBitmap(bmp)
-            } catch (_: Exception) {}
-        }
+    private fun getLocalIpAddress(): String? {
+        return try {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION")
+            val ip = wm.connectionInfo.ipAddress
+            if (ip == 0) null
+            else "%d.%d.%d.%d".format(
+                ip and 0xff, ip shr 8 and 0xff,
+                ip shr 16 and 0xff, ip shr 24 and 0xff)
+        } catch (_: Exception) { null }
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
 
     override fun onResume() {
         super.onResume()
-        val filter = IntentFilter("BABYGUARD_NEW_DATA")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+        val filter = IntentFilter().apply {
+            addAction("BABYGUARD_NEW_DATA")
+            addAction("BABYGUARD_HIGH_ALERT")
+            addAction("BABYGUARD_CMD_RESULT")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(dataReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else registerReceiver(dataReceiver, filter)
-        loadHistoryToUI()
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(dataReceiver, filter)
+        }
+        handler.post(soundDecayRunnable)
+
+        // Covers the case where a HIGH alert fired while this screen wasn't foregrounded (so the
+        // broadcast above was missed) — e.g. opening the app from recents rather than tapping
+        // the notification. The overlay still needs to show once the parent gets here.
+        if (BabyGuardService.isHighAlertActive) {
+            showActiveAlert(BabyGuardService.activeHeadline)
+        }
     }
 
     override fun onPause() {
         super.onPause()
-        unregisterReceiver(dataReceiver)
-        stopVideoServer()
+        try { unregisterReceiver(dataReceiver) } catch (_: Exception) {}
+        handler.removeCallbacks(soundDecayRunnable)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacks(soundDecayRunnable)
+        stopAudioListening()
         stopVideoServer()
-        handler.removeCallbacks(motionDecayRunnable)
-        activeRingtone?.stop()
+        try { unregisterReceiver(dataReceiver) } catch (_: Exception) {}
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        when {
-            alertOverlay.visibility == View.VISIBLE  -> dismissActiveAlert()
-            cardVideo.visibility    == View.VISIBLE  -> {
-                hideCard(cardVideo, R.anim.slide_out_up); stopVideoServer()
-            }
-            cardSettings.visibility == View.VISIBLE  -> hideCard(cardSettings, R.anim.slide_out_right)
-            else -> super.onBackPressed()
+        if (pairingLayout.visibility == View.VISIBLE) {
+            // Don't go back from pairing — finish the activity
+            finish()
+        } else {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
         }
     }
+
 }

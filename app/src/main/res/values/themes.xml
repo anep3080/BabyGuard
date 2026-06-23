@@ -7,4 +7,22 @@
         <item name="android:statusBarColor">#fff8f0</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
+
+    <!-- Fully-rounded pill button — used in camera bottom panel (dark theme) -->
+    <style name="Widget.BabyGuard.Button.Pill" parent="Widget.MaterialComponents.Button.UnelevatedButton">
+        <item name="shapeAppearance">@style/ShapeAppearance.BabyGuard.Pill</item>
+        <item name="android:elevation">0dp</item>
+    </style>
+
+    <!-- Pill button for pastel / light theme (parent activity) -->
+    <style name="Widget.BabyGuard.Button.PillPastel" parent="Widget.MaterialComponents.Button.UnelevatedButton">
+        <item name="shapeAppearance">@style/ShapeAppearance.BabyGuard.Pill</item>
+        <item name="android:elevation">0dp</item>
+        <item name="android:textColor">#7E57C2</item>
+    </style>
+
+    <style name="ShapeAppearance.BabyGuard.Pill" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">50%</item>
+    </style>
 </resources>

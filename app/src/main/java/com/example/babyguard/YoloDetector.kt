@@ -26,6 +26,28 @@ data class BoundingBox(
 
 class YoloDetector(context: Context) {
 
+    // Personal torso/leg pixel baseline from CameraActivity's guided calibration flow (see
+    // AppPreferences). When present, the standing/prone thresholds below compare against this
+    // specific baby + camera setup instead of the generic guessed constants — see isTorsoCompact
+    // and legsNotExtended in detect().
+    private val prefs = AppPreferences(context)
+
+    companion object {
+        /**
+         * Is the face hidden/occluded? Single-keypoint (nose-only) gating let hand/cloth
+         * covers slip through undetected whenever the pose model "hallucinated" a
+         * plausible-but-wrong nose position with moderate confidence (a known behavior of
+         * keypoint models on partially-occluded inputs) — that silently skipped the
+         * suffocation check entirely, which is exactly the "no warning at all" failure mode.
+         * Raising the nose bar to 0.30 and additionally requiring at least one eye to be
+         * confidently visible makes "hidden" the default verdict whenever evidence is
+         * ambiguous — the safe direction for a safety feature (an extra check-in costs far
+         * less than a missed suffocation warning).
+         */
+        fun isFaceHidden(nose: Keypoint, leftEye: Keypoint, rightEye: Keypoint): Boolean =
+            nose.confidence < 0.30f || (leftEye.confidence < 0.25f && rightEye.confidence < 0.25f)
+    }
+
     private var interpreter: Interpreter? = null
     private var useGpu = false
     
@@ -156,52 +178,132 @@ class YoloDetector(context: Context) {
             val ankleY   = (lAnkle.position.y    + rAnkle.position.y)    / 2
             val shoulderY = (lShoulder.position.y + rShoulder.position.y) / 2
 
-            // 1. Standing: tall box + nose above hips + legs extended.
-            //    Changes vs original:
-            //    - shouldersLevel gate relaxed 15% → 20% (YOLO is less precise on 2D images)
-            //    - hipsVisible confidence gate 0.30 → 0.22 (hips often under confidence on monitors)
-            //    - Fallback path: if hips low confidence but legs clearly extended + very tall box,
-            //      still flag standing (handles baby partially in frame or 2D image artifacts)
-            val legLengthY     = Math.abs(ankleY - hipY)
-            val isLegsExtended = legLengthY > (h * 0.40f)
-            val shouldersLevel = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.20f)
-            val hipsVisible    = lHip.confidence > 0.22f && rHip.confidence > 0.22f
-            val anklesVisible  = lAnkle.confidence > 0.22f || rAnkle.confidence > 0.22f
+            // 1. Standing — RECALIBRATED for an elevated, downward-angled camera mount
+            //    (reported setup: camera 2-3ft from the baby, mounted ~1ft above the baby's
+            //    own standing height, tilted ~30-45° down into the crib).
+            //
+            //    At eye level, "tall box + big nose-hip gap + extended legs" correctly means
+            //    standing. At a steep downward angle it's backwards: a STANDING baby's torso
+            //    axis points back toward the camera, so perspective foreshortens it hard —
+            //    confirmed by direct observation ("when the baby is standing the torso appears
+            //    shorter"). A SUPINE baby lying flat on the mattress has its head-to-feet axis
+            //    laid out across the depth direction from this angle, which perspective
+            //    stretches into a TALL silhouette instead — exactly the old standing signature,
+            //    which is why supine was triggering "standing".
+            //
+            //    New signal: standing now requires a COMPACT, foreshortened torso (small
+            //    shoulder-hip vertical span relative to box height), legs NOT extended away
+            //    from the hip in a long straight line (the opposite of the old gate), and a
+            //    head/face reading as the nearest, highest-confidence point — the geometry you
+            //    actually expect when looking down at a baby's head/shoulders from above.
+            val legLengthY      = Math.abs(ankleY - hipY)
+            val shouldersLevel  = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.20f)
+            val hipsVisible     = lHip.confidence > 0.22f || rHip.confidence > 0.22f
+            val torsoSpanY      = Math.abs(shoulderY - hipY)
+            val isBoxCompact    = h < (w * 1.3f)
+            val headIsNearest   = nose.confidence > 0.30f && nose.position.y < (cy - h * 0.08f)
+
+            // REVERTED at user's request back to plain fixed-fraction-of-box-height thresholds —
+            // the calibration-ratio compactness check, the leg-vs-torso scale-free ratio
+            // cross-check, and the head-to-ankle alpha-angle exclusion (all added afterward) are
+            // removed. None of those layers fixed the "doll standing not detected" report, so
+            // stripping back to this simpler, easier-to-reason-about baseline to retest from here.
+            val isTorsoCompact  = torsoSpanY < (h * 0.32f)
+            val legsNotExtended = legLengthY < (h * 0.30f)
 
             // Primary path: full keypoint evidence
-            val standingPrimary = h > (w * 1.35f) &&
-                                  nose.position.y < (hipY - 40) &&
-                                  isLegsExtended &&
+            val standingPrimary = isBoxCompact &&
+                                  isTorsoCompact &&
+                                  legsNotExtended &&
+                                  headIsNearest &&
                                   shouldersLevel &&
-                                  hipsVisible &&
-                                  nose.confidence > 0.25f
+                                  hipsVisible
 
-            // Fallback: very tall box + nose high + ankles visible even if hips uncertain
-            val standingFallback = h > (w * 1.6f) &&
-                                   nose.confidence > 0.30f &&
-                                   nose.position.y < (cy - h * 0.15f) &&
-                                   anklesVisible &&
+            // Fallback: torso/leg compactness signal holds even if hip keypoints are
+            // low-confidence (legs tucked/occluded under a standing body viewed from above).
+            val standingFallback = isTorsoCompact &&
+                                   legsNotExtended &&
+                                   h < (w * 1.5f) &&
+                                   nose.confidence > 0.35f &&
+                                   headIsNearest &&
                                    shouldersLevel
 
             val isStanding = standingPrimary || standingFallback
 
-            // 2. Prone: face-down (shoulders visible, nose hidden).
-            //    Extra guard: body box must be landscape (w > h * 0.8) because a baby
-            //    standing or sitting produces a portrait box — if nose is hidden then,
-            //    it's just occlusion, not face-down.
-            val bodyIsLandscape = w > h * 0.8f
+            Log.d("BabyGuard_Posture",
+                "standing=$isStanding (primary=$standingPrimary fallback=$standingFallback) | " +
+                "box=$isBoxCompact(h=${"%.0f".format(h)},w=${"%.0f".format(w)}) torso=$isTorsoCompact(${"%.1f".format(torsoSpanY)}) " +
+                "legs=$legsNotExtended(${"%.1f".format(legLengthY)}) head=$headIsNearest(conf=${"%.2f".format(nose.confidence)}) " +
+                "shoulders=$shouldersLevel hips=$hipsVisible(${"%.2f".format(lHip.confidence)}/${"%.2f".format(rHip.confidence)})")
+
+            // 2. Prone: face-down (shoulders visible, face hidden).
+            //    Guard updated to match the elevated-mount recalibration above: the old
+            //    "box is landscape" check (w > h * 0.8) assumed eye-level geometry where a
+            //    standing/sitting box is tall and narrow. The new compact standing signature
+            //    can itself read as landscape-ish from this camera's downward angle, so a
+            //    standing baby with an occluded face (hands, blanket) could wrongly pass that
+            //    old guard. Instead, gate on the ELONGATED-torso signature (not torso-compact)
+            //    that now specifically distinguishes lying flat from standing at this angle.
             val shouldersVisible = lShoulder.confidence > 0.4f || rShoulder.confidence > 0.4f
-            val isProne = shouldersVisible && nose.confidence < 0.2f && bodyIsLandscape
+            val isProne = shouldersVisible && isFaceHidden(nose, kpts[1], kpts[2]) && !isTorsoCompact
 
             return BoundingBox(box, "baby", bestScore, isStanding, isProne, kpts)
         }
         return null
     }
 
+    /**
+     * Looks for a SECOND body-like detection in the same frame, distinct from the
+     * primary one already found by [detect]. Reuses [outputTensor] from the same
+     * inference pass — zero extra inference cost. Threshold is lower than the
+     * primary 0.18f because a secondary subject is often partially out of frame or
+     * farther from the camera.
+     *
+     * Note: the bundled model is a single-class (person/baby pose) detector, so this
+     * can only ever report "another person-shaped body in frame" — not pets or
+     * inanimate objects, since no such class exists in the model.
+     */
+    fun detectSecondaryPerson(primaryBox: RectF): BoundingBox? {
+        if (interpreter == null) return null
+        val data = outputTensor[0]
+        val secondaryThreshold = 0.25f
+
+        var bestScore = 0f; var bestIdx = -1
+        for (i in 0 until 8400) {
+            val score = data[4][i]
+            if (score <= secondaryThreshold || score <= bestScore) continue
+
+            val cx = data[0][i] * 640f; val cy = data[1][i] * 640f
+            val w = data[2][i] * 640f; val h = data[3][i] * 640f
+            val box = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+
+            // Skip anchors that are really just the same body as the primary detection.
+            if (iou(box, primaryBox) > 0.3f) continue
+
+            bestScore = score
+            bestIdx = i
+        }
+
+        if (bestIdx == -1) return null
+        val cx = data[0][bestIdx] * 640f; val cy = data[1][bestIdx] * 640f
+        val w = data[2][bestIdx] * 640f; val h = data[3][bestIdx] * 640f
+        val box = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        return BoundingBox(box, "person", bestScore, false, false, emptyList())
+    }
+
+    private fun iou(a: RectF, b: RectF): Float {
+        val left = maxOf(a.left, b.left); val top = maxOf(a.top, b.top)
+        val right = minOf(a.right, b.right); val bottom = minOf(a.bottom, b.bottom)
+        if (right <= left || bottom <= top) return 0f
+        val inter = (right - left) * (bottom - top)
+        val union = (a.width() * a.height()) + (b.width() * b.height()) - inter
+        return if (union <= 0f) 0f else inter / union
+    }
+
     fun getFaceCrop(bitmap: Bitmap, keypoints: List<Keypoint>): Bitmap? {
         if (keypoints.size < 5) return null
         val nose = keypoints[0]; val lE = keypoints[1]; val rE = keypoints[2]
-        if (nose.confidence < 0.2f) return null
+        if (isFaceHidden(nose, lE, rE)) return null
         val headSize = Math.abs(rE.position.x - lE.position.x) * 4f
         val left = (nose.position.x - headSize / 2).toInt().coerceIn(0, bitmap.width - 10)
         val top  = (nose.position.y - headSize / 1.5f).toInt().coerceIn(0, bitmap.height - 10)

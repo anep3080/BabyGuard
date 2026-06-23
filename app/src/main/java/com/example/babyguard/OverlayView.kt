@@ -26,6 +26,22 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     // Volatile so the render loop always sees the freshest value without locking.
     @Volatile private var targetResult: SafetyPipeline.DetectionResult? = null
 
+    // The on-screen rect the active video surface actually occupies, in this view's own local
+    // coordinates. Null (default) means "assume the video fills this entire view" — true for the
+    // internal camera, whose CameraX PreviewView is full-bleed/edge-to-edge. When the UVC camera
+    // is active, CameraActivity.applyUvcAspectFit() letterboxes its TextureView to a smaller,
+    // centered box instead of filling the screen — without telling the overlay about that box,
+    // the skeleton/bbox would stay scaled to this view's full bounds and drift away from the
+    // actual video pixels.
+    @Volatile private var videoRect: RectF? = null
+
+    /** Tells the overlay the actual on-screen rectangle the active video surface occupies.
+     *  Pass null to go back to using this view's own full bounds (internal camera). */
+    fun setVideoRect(rect: RectF?) {
+        videoRect = rect
+        postInvalidate()
+    }
+
     // ── Paints ────────────────────────────────────────────────────────────────
     private val safePaint = Paint().apply {
         color = Color.GREEN; style = Paint.Style.STROKE; strokeWidth = 5f; isAntiAlias = true
@@ -113,10 +129,18 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
             return
         }
 
-        // YOLOv8n-pose outputs keypoints in a 640×640 coordinate space.
-        // Scale to this view's actual pixel dimensions.
-        val sx = width.toFloat()  / 640f
-        val sy = height.toFloat() / 640f
+        // YOLOv8n-pose outputs keypoints in a 640×640 coordinate space. Scale to the actual
+        // video rect (see setVideoRect) instead of always assuming this view's full bounds —
+        // when a videoRect is set (UVC mode), ox/oy offset every drawn coordinate into that
+        // letterboxed box so the overlay lines up with the real video pixels instead of the
+        // wider/taller space around it.
+        val vr = videoRect
+        val baseW = vr?.width()  ?: width.toFloat()
+        val baseH = vr?.height() ?: height.toFloat()
+        val ox = vr?.left ?: 0f
+        val oy = vr?.top  ?: 0f
+        val sx = baseW / 640f
+        val sy = baseH / 640f
 
         // ── 1. Skeleton — continuous EMA toward latest keypoint targets ────────
         if (result.keypoints.isNotEmpty()) {
@@ -141,13 +165,13 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 val ca = result.keypoints.getOrNull(a)?.confidence ?: 0f
                 val cb = result.keypoints.getOrNull(b)?.confidence ?: 0f
                 if (pa != null && pb != null && ca > 0.3f && cb > 0.3f) {
-                    canvas.drawLine(pa.x * sx, pa.y * sy, pb.x * sx, pb.y * sy, bonePaint)
+                    canvas.drawLine(ox + pa.x * sx, oy + pa.y * sy, ox + pb.x * sx, oy + pb.y * sy, bonePaint)
                 }
             }
             // Joints
             for ((id, sp) in smoothedKpts) {
                 if ((result.keypoints.getOrNull(id)?.confidence ?: 0f) > 0.3f) {
-                    canvas.drawCircle(sp.x * sx, sp.y * sy, 6f, jointPaint)
+                    canvas.drawCircle(ox + sp.x * sx, oy + sp.y * sy, 6f, jointPaint)
                 }
             }
         } else {
@@ -164,10 +188,10 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 smoothedBox.bottom + ALPHA * (box.bottom - smoothedBox.bottom)
             )
             val paint = if (result.isStanding || result.isProne) dangerPaint else safePaint
-            canvas.drawRect(smoothedBox.left * sx, smoothedBox.top * sy,
-                            smoothedBox.right * sx, smoothedBox.bottom * sy, paint)
+            canvas.drawRect(ox + smoothedBox.left * sx, oy + smoothedBox.top * sy,
+                            ox + smoothedBox.right * sx, oy + smoothedBox.bottom * sy, paint)
             canvas.drawText(result.status,
-                smoothedBox.left * sx, (smoothedBox.top * sy) - 10f, textPaint)
+                ox + smoothedBox.left * sx, oy + (smoothedBox.top * sy) - 10f, textPaint)
         } ?: run { hasBox = false }
 
         // ── 3. Face bounding box + emotion label ──────────────────────────────
@@ -179,10 +203,10 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 smoothedFace.right  + ALPHA * (r.right  - smoothedFace.right),
                 smoothedFace.bottom + ALPHA * (r.bottom - smoothedFace.bottom)
             )
-            canvas.drawRect(smoothedFace.left * sx, smoothedFace.top * sy,
-                            smoothedFace.right * sx, smoothedFace.bottom * sy, facePaint)
+            canvas.drawRect(ox + smoothedFace.left * sx, oy + smoothedFace.top * sy,
+                            ox + smoothedFace.right * sx, oy + smoothedFace.bottom * sy, facePaint)
             canvas.drawText(result.mood,
-                smoothedFace.left * sx, (smoothedFace.top * sy) - 5f, smallTextPaint)
+                ox + smoothedFace.left * sx, oy + (smoothedFace.top * sy) - 5f, smallTextPaint)
         } ?: run { hasFace = false }
     }
 

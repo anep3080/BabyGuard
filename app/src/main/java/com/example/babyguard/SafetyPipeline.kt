@@ -19,6 +19,20 @@ class SafetyPipeline(
     fun isBabyPresentRecently(): Boolean =
         System.currentTimeMillis() - lastBabyDetectedTime < PRESENCE_LOCK_MS
 
+    /**
+     * True while a posture streak is still building toward POSTURE_CONFIRM, or the
+     * suffocation timer is running. CameraActivity uses this to force fast-rate scanning
+     * instead of the motion-driven dynamic delay: a baby lying still face-down, or calmly
+     * covered, produces little/no MOG motion — so the normal "no motion → slow scan" tier
+     * is exactly backwards for the two cases that matter most. This only engages once a
+     * candidate signal has already shown up in at least one frame, so it doesn't burn
+     * battery scanning fast 24/7 — only while something is actively being confirmed.
+     */
+    fun isInvestigating(): Boolean =
+        suffocationTimerStart != 0L ||
+        (proneStreak    in 1 until POSTURE_CONFIRM) ||
+        (standingStreak in 1 until POSTURE_CONFIRM)
+
     private var lastFullScanTime = 0L
 
     // ── Motion thresholds scaled by sensitivity ───────────────────────────────
@@ -30,9 +44,13 @@ class SafetyPipeline(
     // ── Posture confirmation counters ─────────────────────────────────────────
     // Require N consecutive positive frames before raising an alert.
     // Eliminates single-frame false positives from YOLO keypoint jitter.
+    // Was 3 — at the slower AI scan rates (ECO/BALANCED idle ticks run every
+    // 800ms-2s) that added up to multiple real seconds of lag before a standing
+    // baby got flagged. 2 frames still filters single-frame jitter but roughly
+    // halves that confirmation delay.
     private var proneStreak    = 0
     private var standingStreak = 0
-    private val POSTURE_CONFIRM = 3     // frames
+    private val POSTURE_CONFIRM = 2     // frames
 
     // ── Baby Presence Lock ────────────────────────────────────────────────────
     // Once YOLO finds a person, we keep scanning at full rate for PRESENCE_LOCK_MS
@@ -42,8 +60,47 @@ class SafetyPipeline(
     private val PRESENCE_LOCK_MS = 15_000L  // 15 seconds after last detection
 
     // ── Suffocation timer ─────────────────────────────────────────────────────
+    // Scaled by sensitivity like motionThreshold above — was a flat 5000ms, which
+    // read as "takes too long to alert" once a cover was actually detected.
+    // Sensitivity 3 (quiet nursery / wants fast alerts) now escalates in ~2s.
     private var suffocationTimerStart = 0L
-    private val SUFFOCATION_THRESHOLD = 5000L
+    private val SUFFOCATION_THRESHOLD get() = when (sensitivity) { 1 -> 6000L; 3 -> 2000L; else -> 3500L }
+
+    // ── Struggle-while-covered fast-track ────────────────────────────────────
+    // A calm, still face-cover can wait for the full suffocation timer, but if the
+    // baby is also moving/struggling hard while covered, that's more urgent — escalate
+    // to HIGH much sooner instead of blindly waiting the full threshold above.
+    private val STRUGGLE_MOTION_THRESHOLD = 55
+    private val STRUGGLE_CONFIRM_MS get() = when (sensitivity) { 1 -> 2000L; 3 -> 700L; else -> 1200L }
+
+    // ── Restlessness / agitation streak ──────────────────────────────────────
+    // Sustained high motion while lying down safely (not standing/prone) can signal
+    // distress, tangled bedding, etc. Streak-confirmed to avoid single-frame jitter.
+    private var agitationStreak = 0
+    private val AGITATION_CONFIRM = 4
+    private val AGITATION_MOTION_THRESHOLD = 70
+
+    // ── Extra entity: a second body-like detection in frame ──────────────────
+    private var extraEntityStreak = 0
+    private val EXTRA_ENTITY_CONFIRM = 4
+    private val EXTRA_ENTITY_MIN_CONF = 0.25f
+    private var lastMotionLevel = 0
+
+    // ── Risk-score fusion + asymmetric hysteresis ─────────────────────────────
+    // Escalation (rank going up) is always immediate — never delay a real danger
+    // signal. De-escalation (rank going down) requires the fused riskScore to stay
+    // below a tier-specific floor for a sustained dwell period first. This kills
+    // tier flicker right at a boundary (e.g. baby briefly settling mid-struggle no
+    // longer instantly cancels a HIGH alert) without touching any of the existing
+    // rule-based event detection above.
+    private var heldTierRank = 0   // 0=LOW 1=MEDIUM 2=HIGH — currently reported tier
+    private var fallingSince = 0L
+    private var heldStatus = ""
+    private var heldAction = ""
+    private val HIGH_FALL_SCORE = 50f
+    private val HIGH_FALL_DWELL_MS = 6_000L
+    private val MEDIUM_FALL_SCORE = 12f
+    private val MEDIUM_FALL_DWELL_MS = 4_000L
 
     // ── Emotion rolling vote ──────────────────────────────────────────────────
     // Return the most-voted mood over the last MOOD_WINDOW frames so the label
@@ -69,7 +126,9 @@ class SafetyPipeline(
         val faceRect: android.graphics.RectF? = null,
         val bodyBox: android.graphics.RectF? = null,
         val tier: String = "LOW",
-        val action: String = "Normal"
+        val action: String = "Normal",
+        val faceJustCovered: Boolean = false,
+        val riskScore: Float = 0f
     )
 
     fun processFrame(bitmap: Bitmap): DetectionResult {
@@ -80,9 +139,9 @@ class SafetyPipeline(
         val filteredPixels = if (motionPixels < when (sensitivity) { 1 -> 2500; 3 -> 600; else -> 1500 }) 0 else motionPixels
         val hasMotion = filteredPixels > motionThreshold
 
-        // Logarithmic motion level (0-100 display scale)
+        // sqrt scale against 1920×1080 virtual area: 1%→10, 10%→32, 50%→71, 100%→100
         val motionLevel = if (filteredPixels == 0) 0
-                          else (Math.sqrt(filteredPixels.toDouble() / 1200.0) * 8).toInt().coerceAtMost(100)
+                          else (Math.sqrt(filteredPixels.toDouble() / 2_073_600.0) * 100).toInt().coerceAtMost(100)
 
         val isHeartbeat = now - lastFullScanTime > heartbeatMs
         val babyPresentRecently = now - lastBabyDetectedTime < PRESENCE_LOCK_MS
@@ -117,9 +176,20 @@ class SafetyPipeline(
             keypoints = yoloResult.keypoints
             bodyBox   = yoloResult.box
 
+            // ── Extra entity: second body-like detection, distinct from the baby ──
+            val secondary = yoloDetector.detectSecondaryPerson(yoloResult.box)
+            if (secondary != null && secondary.confidence >= EXTRA_ENTITY_MIN_CONF)
+                extraEntityStreak++ else extraEntityStreak = 0
+
             // ── Posture with confirmation streaks ────────────────────────────
-            if (yoloResult.isProne)    proneStreak++    else proneStreak = 0
-            if (yoloResult.isStanding) standingStreak++ else standingStreak = 0
+            // Decay by 1 on a miss instead of hard-resetting to 0: a single frame of YOLO
+            // keypoint jitter (or a marginal ratio/confidence miss) was wiping out an
+            // otherwise-confirmed-in-progress streak and forcing it to restart from scratch —
+            // the actual mechanism behind "doesn't effectively detect standing" reports, on
+            // top of the geometric threshold relaxation in YoloDetector. A real posture change
+            // (not just one bad frame) still clears the streak within ~POSTURE_CONFIRM misses.
+            if (yoloResult.isProne)    proneStreak++    else proneStreak    = (proneStreak - 1).coerceAtLeast(0)
+            if (yoloResult.isStanding) standingStreak++ else standingStreak = (standingStreak - 1).coerceAtLeast(0)
 
             val confirmedProne    = proneStreak    >= POSTURE_CONFIRM
             val confirmedStanding = standingStreak >= POSTURE_CONFIRM
@@ -137,17 +207,56 @@ class SafetyPipeline(
                 else       -> { tier = "LOW";  action = if (hasMotion) "Active" else "Normal" }
             }
 
+            // ── Restlessness: sustained high motion while lying safely ───────
+            // Only relevant when not already flagged Standing/Prone above.
+            if (posture == "Safe") {
+                if (motionLevel >= AGITATION_MOTION_THRESHOLD) agitationStreak++ else agitationStreak = 0
+                if (agitationStreak >= AGITATION_CONFIRM && tier == "LOW") {
+                    tier = "MEDIUM"; action = "Restless"
+                }
+            } else {
+                agitationStreak = 0
+            }
+
+            // ── Extra entity tier: someone/something else is in frame ────────
+            // Placed after restlessness but before the suffocation/face block below,
+            // so a genuinely more severe suffocation signal can still override it.
+            if (extraEntityStreak >= EXTRA_ENTITY_CONFIRM) {
+                val suddenStop = lastMotionLevel >= AGITATION_MOTION_THRESHOLD && motionLevel < 15
+                when {
+                    suddenStop -> {
+                        tier = "HIGH"; action = "Possible Interference"
+                        status = "🚨 CHECK BABY — Unexpected presence, motion stopped"
+                    }
+                    tier == "LOW" -> { tier = "MEDIUM"; action = "Extra Presence" }
+                }
+            }
+
             // ── Emotion with rolling vote ────────────────────────────────────
             val faceCrop = yoloDetector.getFaceCrop(bitmap, keypoints)
+            var faceJustCovered = false
+            var occlusionRamp = 0f
             val rawMood = if (faceCrop != null) {
                 faceRect = calculateFaceRect(keypoints)
                 emotionDetector.detectMood(faceCrop)
             } else {
                 if (isProne) "Hidden" else {
                     // Face not visible when not prone → start suffocation clock
-                    if (suffocationTimerStart == 0L) suffocationTimerStart = now
-                    if (now - suffocationTimerStart > SUFFOCATION_THRESHOLD) {
-                        status = "🚨 SUFFOCATION RISK"; tier = "HIGH"; action = "Suffocation"
+                    if (suffocationTimerStart == 0L) {
+                        suffocationTimerStart = now
+                        faceJustCovered = true   // one-shot: true only the instant cover begins
+                    }
+                    val coveredFor = now - suffocationTimerStart
+                    occlusionRamp = (coveredFor.toFloat() / SUFFOCATION_THRESHOLD * 100f).coerceIn(0f, 100f)
+                    when {
+                        // Struggling hard while covered is more urgent than calm cover —
+                        // don't wait the full SUFFOCATION_THRESHOLD if baby is thrashing.
+                        motionLevel >= STRUGGLE_MOTION_THRESHOLD && coveredFor > STRUGGLE_CONFIRM_MS -> {
+                            status = "🚨 SUFFOCATION RISK"; tier = "HIGH"; action = "Suffocation"
+                        }
+                        coveredFor > SUFFOCATION_THRESHOLD -> {
+                            status = "🚨 SUFFOCATION RISK"; tier = "HIGH"; action = "Suffocation"
+                        }
                     }
                     "Analyzing..."
                 }
@@ -171,17 +280,37 @@ class SafetyPipeline(
                 else       -> status
             }
 
-            val result = DetectionResult(status, mood, posture, isProne, isStanding,
-                motionLevel, filteredPixels, keypoints, faceRect, bodyBox, tier, action)
+            // ── Risk-score fusion ─────────────────────────────────────────────
+            // Numeric companion to the rule-based tier above — used only to gate
+            // de-escalation timing in applyHysteresis, never to override escalation.
+            val postureScore = if (isStanding) 95f else if (isProne) 88f else 0f
+            val agitationRamp = (agitationStreak.toFloat() / AGITATION_CONFIRM * 55f).coerceIn(0f, 55f)
+            val moodRamp = if (mood == "Fussy") 22f else 0f
+            val extraEntityRamp = (extraEntityStreak.toFloat() / EXTRA_ENTITY_CONFIRM * 40f).coerceIn(0f, 40f)
+            val riskScore = maxOf(postureScore, occlusionRamp, agitationRamp + moodRamp, extraEntityRamp)
+                .coerceIn(0f, 100f)
+
+            val raw = DetectionResult(status, mood, posture, isProne, isStanding,
+                motionLevel, filteredPixels, keypoints, faceRect, bodyBox, tier, action, faceJustCovered, riskScore)
+            val result = applyHysteresis(raw, riskScore)
             addToBuffer(result)
+            lastMotionLevel = motionLevel
 
         } else {
-            // YOLO found nothing
-            proneStreak = 0; standingStreak = 0; suffocationTimerStart = 0L
+            // YOLO found nothing this frame — decay posture streaks the same way as a single
+            // missed-classification frame above, instead of wiping them instantly. A momentary
+            // dropped detection (motion blur, one slow/skipped scan) shouldn't cost an
+            // otherwise-confirmed standing/prone streak its entire progress.
+            proneStreak    = (proneStreak - 1).coerceAtLeast(0)
+            standingStreak = (standingStreak - 1).coerceAtLeast(0)
+            suffocationTimerStart = 0L
+            agitationStreak = 0; extraEntityStreak = 0
             val mood = if (hasMotion) "Analyzing..." else "Sleeping"
-            val result = DetectionResult(status, mood, "None", false, false,
-                motionLevel, filteredPixels, tier = "LOW", action = "Normal")
+            val raw = DetectionResult(status, mood, "None", false, false,
+                motionLevel, filteredPixels, tier = "LOW", action = "Normal", riskScore = 0f)
+            val result = applyHysteresis(raw, 0f)
             addToBuffer(result)
+            lastMotionLevel = motionLevel
         }
 
         return getConsensusResult()
@@ -192,7 +321,7 @@ class SafetyPipeline(
     private fun calculateFaceRect(keypoints: List<Keypoint>): android.graphics.RectF? {
         if (keypoints.size < 5) return null
         val nose = keypoints[0]; val lE = keypoints[1]; val rE = keypoints[2]
-        if (nose.confidence < 0.2f) return null
+        if (YoloDetector.isFaceHidden(nose, lE, rE)) return null
         val headSize = Math.abs(rE.position.x - lE.position.x) * 4f
         return android.graphics.RectF(
             nose.position.x - headSize / 2,
@@ -200,6 +329,42 @@ class SafetyPipeline(
             nose.position.x + headSize / 2,
             nose.position.y + headSize / 3f
         )
+    }
+
+    private fun tierRank(t: String): Int = when (t) { "HIGH" -> 2; "MEDIUM" -> 1; else -> 0 }
+    private fun rankTier(r: Int): String = when (r) { 2 -> "HIGH"; 1 -> "MEDIUM"; else -> "LOW" }
+
+    /**
+     * Asymmetric hysteresis: escalation is immediate, de-escalation requires the
+     * fused riskScore to stay below a tier-specific floor for a sustained dwell
+     * time. While waiting, the frame's fresh posture/mood/keypoints/motionLevel
+     * still pass through untouched — only tier/action/status are held.
+     */
+    private fun applyHysteresis(raw: DetectionResult, riskScore: Float): DetectionResult {
+        val rawRank = tierRank(raw.tier)
+        val now = System.currentTimeMillis()
+
+        if (rawRank >= heldTierRank) {
+            heldTierRank = rawRank
+            heldStatus = raw.status
+            heldAction = raw.action
+            fallingSince = 0L
+            return raw
+        }
+
+        // Candidate de-escalation — needs sustained calm before it's allowed through.
+        if (fallingSince == 0L) fallingSince = now
+        val dwell = if (heldTierRank == 2) HIGH_FALL_DWELL_MS else MEDIUM_FALL_DWELL_MS
+        val scoreFloor = if (heldTierRank == 2) HIGH_FALL_SCORE else MEDIUM_FALL_SCORE
+        val readyToDrop = (now - fallingSince >= dwell) && riskScore < scoreFloor
+
+        return if (readyToDrop) {
+            heldTierRank = rawRank
+            fallingSince = 0L
+            raw
+        } else {
+            raw.copy(tier = rankTier(heldTierRank), action = heldAction, status = heldStatus)
+        }
     }
 
     private fun addToBuffer(result: DetectionResult) {
@@ -223,14 +388,18 @@ class SafetyPipeline(
 
         // Find the freshest frame with actual keypoint data
         val latestKeypoints = resultBuffer.findLast { it.keypoints.isNotEmpty() }
+        // faceJustCovered is a one-shot transient signal — always read from the newest
+        // frame rather than the vote-smoothed one, or it could get diluted/missed entirely.
+        val latestFaceJustCovered = resultBuffer.last().faceJustCovered
 
         val base = resultBuffer.findLast { it.status == consensusStatus } ?: resultBuffer.last()
         return if (latestKeypoints != null && latestKeypoints != base)
             base.copy(status = consensusStatus,
                       keypoints = latestKeypoints.keypoints,
                       bodyBox   = latestKeypoints.bodyBox,
-                      faceRect  = latestKeypoints.faceRect)
+                      faceRect  = latestKeypoints.faceRect,
+                      faceJustCovered = latestFaceJustCovered)
         else
-            base.copy(status = consensusStatus)
+            base.copy(status = consensusStatus, faceJustCovered = latestFaceJustCovered)
     }
 }

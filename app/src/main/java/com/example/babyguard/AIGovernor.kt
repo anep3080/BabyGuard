@@ -112,6 +112,19 @@ class AIGovernor(context: Context) {
     /** Milliseconds SafetyPipeline waits before forcing a YOLO heartbeat scan. */
     fun getHeartbeatInterval(): Long = currentConfig.heartbeatMs
 
+    // ── Fast-scan override while a posture/occlusion signal is being confirmed ─────────
+    // See SafetyPipeline.isInvestigating(). Deliberately not as aggressive as PERFORMANCE
+    // mode's normal floor in every tier — this only needs to beat the "no motion" tier
+    // above (800ms-2000ms) by enough to make POSTURE_CONFIRM / the suffocation timer
+    // resolve in a couple hundred ms instead of multiple seconds, not to match the
+    // absolute fastest possible rate regardless of mode/battery impact.
+    private val investigatingDelayMs = mapOf(
+        AppPreferences.AIMode.ECO         to 400L,
+        AppPreferences.AIMode.BALANCED    to 200L,
+        AppPreferences.AIMode.PERFORMANCE to 100L
+    )
+    fun getInvestigatingDelay(): Long = investigatingDelayMs[prefs.aiMode] ?: 200L
+
     fun isThrottlingActive(): Boolean = isThrottling
     fun getCurrentTemperature(): Float = currentTemperature
     fun getCurrentMode(): AppPreferences.AIMode = prefs.aiMode

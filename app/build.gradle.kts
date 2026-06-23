@@ -71,4 +71,28 @@ dependencies {
     implementation("com.google.zxing:core:3.5.2")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
     implementation("com.github.fornewid:neumorphism:0.3.2")
+    // Real UVC (USB Video Class) camera decode/preview — replaces the old detection-only
+    // USB camera stub. Pinned to 3.2.7: the latest tag that both builds successfully on
+    // JitPack and whose MultiCameraClient/IDeviceConnectCallBack API was verified directly
+    // against this exact tag's source (newer tags 3.2.8+ fail to build on JitPack).
+    //
+    // libausbc declares `api 'com.gyf.immersionbar:immersionbar:3.0.0'` and
+    // `implementation 'com.zlc.glide:webpdecoder:1.6.4.9.0'` as transitive deps. Both were
+    // only ever published to jcenter, which has been shut down, so they 404 on every
+    // configured repo (google/mavenCentral/jitpack) and fail the build. Neither is used by
+    // MultiCameraClient/Camera (the only classes this app calls into) — immersionbar is a
+    // status-bar-tinting helper used by AUSBC's own demo Activities, and webpdecoder is a
+    // Glide module for decoding .webp images, used by AUSBC's UI widgets. Excluding both
+    // transitive deps removes the unresolvable artifacts without touching the UVC code path.
+    implementation("com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.2.7") {
+        exclude(group = "com.gyf.immersionbar")
+        exclude(group = "com.zlc.glide", module = "webpdecoder")
+    }
+    // libausbc declares its dependency on :libuvc (the module that actually contains
+    // com.serenegiant.usb.USBMonitor/UVCCamera) as `implementation`, not `api`. That scope
+    // doesn't propagate to compileClasspath of consumers, which is why
+    // `import com.serenegiant.usb.USBMonitor` fails with "Unresolved reference" even though
+    // libausbc itself resolves fine. Declaring it directly here puts it on our own compile
+    // classpath. Same version tag as libausbc so the published artifact is guaranteed to exist.
+    implementation("com.github.jiangdongguo.AndroidUSBCamera:libuvc:3.2.7")
 }
