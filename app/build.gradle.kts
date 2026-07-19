@@ -71,6 +71,7 @@ dependencies {
     implementation("com.google.zxing:core:3.5.2")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
     implementation("com.github.fornewid:neumorphism:0.3.2")
+    implementation("androidx.viewpager2:viewpager2:1.0.0")
     // Real UVC (USB Video Class) camera decode/preview — replaces the old detection-only
     // USB camera stub. Pinned to 3.2.7: the latest tag that both builds successfully on
     // JitPack and whose MultiCameraClient/IDeviceConnectCallBack API was verified directly

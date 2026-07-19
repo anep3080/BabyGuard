@@ -103,6 +103,12 @@ class ParentActivity : AppCompatActivity() {
     // ── State ─────────────────────────────────────────────────────────────────
     private lateinit var prefs: AppPreferences
     private lateinit var dbHelper: AlertDatabaseHelper
+
+    // After the parent dismisses an alert, suppress incoming posture/mood telemetry updates
+    // for DISMISS_CALM_MS and show "Calm" in the insights — gives the Baby Unit time to reset
+    // its pipeline and stops the display from immediately jumping back to "Standing" again.
+    private var dismissCooldownUntil = 0L
+    private val DISMISS_CALM_MS = 2_500L
     private val recorder by lazy { VideoRecorder(this) }
 
     // NOTE: alert firing/cooldowns/logging now live in BabyGuardService — it's the only
@@ -157,11 +163,15 @@ class ParentActivity : AppCompatActivity() {
             val jsonString = intent?.getStringExtra("payload") ?: return
             try {
                 val json   = org.json.JSONObject(jsonString)
-                val mood   = json.optString("mood", "Calm")
+                val mood    = json.optString("mood", "Calm")
                 val posture = json.optString("posture", "Safe")
 
-                tvInsightMood.text    = mood
-                tvInsightPosture.text = posture
+                // During the post-dismiss calm window, hold "Calm" on screen instead of
+                // immediately re-showing whatever the Baby Unit's pipeline last reported.
+                if (System.currentTimeMillis() >= dismissCooldownUntil) {
+                    tvInsightMood.text    = mood
+                    tvInsightPosture.text = posture
+                }
 
                 // Motion meter: peak-hold + decay (decay runnable handles the fall-off).
                 val newMotion = json.optInt("motion_level", 0).toFloat()
@@ -605,9 +615,20 @@ class ParentActivity : AppCompatActivity() {
     private fun dismissActiveAlert() {
         alertOverlay.visibility = View.GONE
         alertOverlay.clearAnimation()
-        // Tells BabyGuardService to stop the ringtone/vibration and cancel the notification —
-        // mirrors what AlarmActivity's dismiss button used to do.
+        // Stop ringtone/vibration/notification in the background service.
         sendBroadcast(Intent("BABYGUARD_ACK").setPackage(packageName))
+        // Tell the Baby Unit to flush its pipeline state (hysteresis, streaks, consensus buffer)
+        // so it stops sending HIGH-tier telemetry for the now-resolved condition immediately.
+        sendBroadcast(Intent("BABYGUARD_CMD").setPackage(packageName)
+            .putExtra("cmd", org.json.JSONObject().apply {
+                put("cmd", "reset_pipeline")
+            }.toString()))
+        // Show a brief "Baby awake, calm" state in the insights while the Baby Unit resets —
+        // prevents the posture/mood labels from jumping straight back to "Standing / Danger"
+        // on the very next telemetry tick.
+        tvInsightPosture.text = "Calm"
+        tvInsightMood.text    = "Calm"
+        dismissCooldownUntil  = System.currentTimeMillis() + DISMISS_CALM_MS
     }
 
     private fun createNotificationChannel() {

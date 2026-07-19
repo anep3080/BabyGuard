@@ -3,6 +3,7 @@ package com.example.babyguard
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -15,6 +16,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -134,6 +136,34 @@ class CameraActivity : AppCompatActivity() {
     private var currentRiskScore       = 0f
 
     private var frameCount = 0; private var lastFpsCheckTime = 0L; private var currentFps = 0
+
+    // ── Crib calibration ──────────────────────────────────────────────────────
+    private lateinit var calibManager: CribCalibrationManager
+
+    /** Launches CribCalibrationActivity; on RESULT_OK recomputes + pushes the new homography. */
+    private val calibLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            prefs.loadCribCorners()?.let { corners ->
+                calibManager.computeHomography(corners)
+                yoloDetector.setCalibration(calibManager)
+            }
+            // CribCalibrationActivity briefly owned the camera and left the MOG2 background
+            // stale — reset both the background model and the pipeline state so the first
+            // frames after returning don't saturate the foreground mask or carry stale streaks.
+            safetyPipeline.forceReset()
+            motionDetector.resetBackground()
+            findViewById<View>(R.id.tvCalibBanner)?.isGone = true
+            findViewById<View>(R.id.btnClearCalib)?.isVisible = true
+            Toast.makeText(this, "✅ Crib calibration saved — angle correction active", Toast.LENGTH_LONG).show()
+        }
+        // Always restart the camera after returning from calibration.
+        // CribCalibrationActivity calls provider.unbindAll() before binding to itself, which
+        // also kills CameraActivity's CameraX preview binding — without this the viewFinder
+        // stays black until the user manually flips the camera selector.
+        if (!usingUsbCamera) startCamera()
+    }
 
     private val batteryManager by lazy {
         getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
@@ -386,6 +416,43 @@ class CameraActivity : AppCompatActivity() {
             sensitivity = prefs.motionSensitivity
         )
 
+        // ── Crib calibration: load saved corners and push homography to YOLO ──
+        calibManager = CribCalibrationManager()
+        prefs.loadCribCorners()?.let { corners ->
+            calibManager.computeHomography(corners)
+            yoloDetector.setCalibration(calibManager)
+            Log.i("BabyGuard", "Crib calibration loaded — homography active")
+        }
+
+        // Calibrate button (small icon button in the controls area)
+        findViewById<View>(R.id.btnCalibrateRoi)?.setOnClickListener {
+            calibLauncher.launch(Intent(this, CribCalibrationActivity::class.java))
+        }
+
+        // Clear calibration button — removes saved corners and disables homography correction
+        findViewById<View>(R.id.btnClearCalib)?.setOnClickListener {
+            prefs.clearCribCalibration()
+            yoloDetector.setCalibration(null)  // disable perspective correction
+            calibManager.release()             // release the OpenCV Mat
+            safetyPipeline.forceReset()
+            motionDetector.resetBackground()
+            findViewById<View>(R.id.tvCalibBanner)?.isVisible = true
+            Toast.makeText(this,
+                "Calibration cleared — using default posture detection",
+                Toast.LENGTH_LONG).show()
+        }
+        // Hide the clear button when not calibrated (nothing to clear)
+        findViewById<View>(R.id.btnClearCalib)?.isVisible = prefs.isCribCalibrated
+
+        // Show uncalibrated banner if no calibration saved yet
+        val tvCalibBanner = findViewById<TextView>(R.id.tvCalibBanner)
+        if (tvCalibBanner != null) {
+            tvCalibBanner.isVisible = !prefs.isCribCalibrated
+            tvCalibBanner.setOnClickListener {
+                calibLauncher.launch(Intent(this, CribCalibrationActivity::class.java))
+            }
+        }
+
         val neededPermissions = listOf(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
@@ -548,9 +615,12 @@ class CameraActivity : AppCompatActivity() {
             val json = org.json.JSONObject(raw)
             val cmd = json.optString("cmd")
             val success = when (cmd) {
-                "switch_lens"   -> flipLens()
-                "camera_source" -> remoteSwitchCameraSource(json.optString("source") == "usb")
-                else            -> return
+                "switch_lens"    -> flipLens()
+                "camera_source"  -> remoteSwitchCameraSource(json.optString("source") == "usb")
+                // Parent dismissed a HIGH alert — clear stale hysteresis / streaks so the
+                // Baby Unit stops reporting HIGH immediately rather than waiting out the dwell.
+                "reset_pipeline" -> { safetyPipeline.forceReset(); motionDetector.resetBackground(); true }
+                else             -> return
             }
             alertClient?.send(org.json.JSONObject().apply {
                 put("type",    "cmd_ack")

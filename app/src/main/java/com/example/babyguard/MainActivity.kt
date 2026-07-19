@@ -11,6 +11,15 @@ import soup.neumorphism.NeumorphCardView
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Show onboarding on first launch, then never again.
+        val prefs = AppPreferences(this)
+        if (!prefs.hasSeenOnboarding) {
+            startActivity(Intent(this, OnboardingActivity::class.java))
+            finish()
+            return
+        }
+
         setContentView(R.layout.activity_main)
 
         // Find the new clickable cards and route them!

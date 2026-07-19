@@ -50,6 +50,15 @@ class YoloDetector(context: Context) {
 
     private var interpreter: Interpreter? = null
     private var useGpu = false
+
+    // Injected by CameraActivity after loading the user's crib calibration.
+    // When non-null and isReady(), detect() uses corrected keypoints + spine-vector
+    // math instead of the box-fraction fallback.
+    @Volatile private var calibrationManager: CribCalibrationManager? = null
+
+    fun setCalibration(manager: CribCalibrationManager?) {
+        calibrationManager = manager
+    }
     
     // PRE-ALLOCATE: Note 9 fails on large object allocations every frame
     private val outputTensor = Array(1) { Array(56) { FloatArray(8400) } }
@@ -169,83 +178,113 @@ class YoloDetector(context: Context) {
 
             val box = RectF(cx - w/2, cy - h/2, cx + w/2, cy + h/2)
 
-            // --- REFINED POSTURE LOGIC ---
-            val nose = kpts[0]; val lHip = kpts[11]; val rHip = kpts[12]
-            val lShoulder = kpts[5]; val rShoulder = kpts[6]
-            val lAnkle = kpts[15]; val rAnkle = kpts[16]
+            val nose      = kpts[0]
+            val lShoulder = kpts[5];  val rShoulder = kpts[6]
+            val lHip      = kpts[11]; val rHip      = kpts[12]
+            val lAnkle    = kpts[15]; val rAnkle    = kpts[16]
 
-            val hipY     = (lHip.position.y      + rHip.position.y)      / 2
-            val ankleY   = (lAnkle.position.y    + rAnkle.position.y)    / 2
-            val shoulderY = (lShoulder.position.y + rShoulder.position.y) / 2
-
-            // 1. Standing — RECALIBRATED for an elevated, downward-angled camera mount
-            //    (reported setup: camera 2-3ft from the baby, mounted ~1ft above the baby's
-            //    own standing height, tilted ~30-45° down into the crib).
+            // ── POSTURE LOGIC — two paths depending on calibration state ──────────
             //
-            //    At eye level, "tall box + big nose-hip gap + extended legs" correctly means
-            //    standing. At a steep downward angle it's backwards: a STANDING baby's torso
-            //    axis points back toward the camera, so perspective foreshortens it hard —
-            //    confirmed by direct observation ("when the baby is standing the torso appears
-            //    shorter"). A SUPINE baby lying flat on the mattress has its head-to-feet axis
-            //    laid out across the depth direction from this angle, which perspective
-            //    stretches into a TALL silhouette instead — exactly the old standing signature,
-            //    which is why supine was triggering "standing".
+            // PATH A (CALIBRATED): apply perspective-correction homography to all
+            //   keypoints, then measure the physical spine length in the corrected
+            //   "top-down" space. Camera-angle distortion is eliminated before any
+            //   threshold is applied, making the discriminator invariant to mount angle.
             //
-            //    New signal: standing now requires a COMPACT, foreshortened torso (small
-            //    shoulder-hip vertical span relative to box height), legs NOT extended away
-            //    from the hip in a long straight line (the opposite of the old gate), and a
-            //    head/face reading as the nearest, highest-confidence point — the geometry you
-            //    actually expect when looking down at a baby's head/shoulders from above.
-            val legLengthY      = Math.abs(ankleY - hipY)
-            val shouldersLevel  = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.20f)
-            val hipsVisible     = lHip.confidence > 0.22f || rHip.confidence > 0.22f
-            val torsoSpanY      = Math.abs(shoulderY - hipY)
-            val isBoxCompact    = h < (w * 1.3f)
-            val headIsNearest   = nose.confidence > 0.30f && nose.position.y < (cy - h * 0.08f)
+            // PATH B (UNCALIBRATED FALLBACK): original box-height-fraction heuristics
+            //   from direct observation of the downward-angled setup.  Less precise but
+            //   still functional while the user hasn't calibrated yet.
 
-            // REVERTED at user's request back to plain fixed-fraction-of-box-height thresholds —
-            // the calibration-ratio compactness check, the leg-vs-torso scale-free ratio
-            // cross-check, and the head-to-ankle alpha-angle exclusion (all added afterward) are
-            // removed. None of those layers fixed the "doll standing not detected" report, so
-            // stripping back to this simpler, easier-to-reason-about baseline to retest from here.
-            val isTorsoCompact  = torsoSpanY < (h * 0.32f)
-            val legsNotExtended = legLengthY < (h * 0.30f)
+            val calib = calibrationManager?.takeIf { it.isReady() }
+            val isStanding: Boolean
+            val isProne:    Boolean
 
-            // Primary path: full keypoint evidence
-            val standingPrimary = isBoxCompact &&
-                                  isTorsoCompact &&
-                                  legsNotExtended &&
-                                  headIsNearest &&
-                                  shouldersLevel &&
-                                  hipsVisible
+            if (calib != null) {
+                // ── PATH A: homography-corrected spine-vector math ────────────────
+                val corrected = calib.transformKeypoints(kpts)
 
-            // Fallback: torso/leg compactness signal holds even if hip keypoints are
-            // low-confidence (legs tucked/occluded under a standing body viewed from above).
-            val standingFallback = isTorsoCompact &&
-                                   legsNotExtended &&
-                                   h < (w * 1.5f) &&
-                                   nose.confidence > 0.35f &&
-                                   headIsNearest &&
-                                   shouldersLevel
+                val cLS = corrected[5];  val cRS = corrected[6]
+                val cLH = corrected[11]; val cRH = corrected[12]
+                val cNose = corrected[0]
 
-            val isStanding = standingPrimary || standingFallback
+                val shoulderConfident = cLS.confidence > 0.25f || cRS.confidence > 0.25f
+                val hipConfident      = cLH.confidence > 0.22f || cRH.confidence > 0.22f
 
-            Log.d("BabyGuard_Posture",
-                "standing=$isStanding (primary=$standingPrimary fallback=$standingFallback) | " +
-                "box=$isBoxCompact(h=${"%.0f".format(h)},w=${"%.0f".format(w)}) torso=$isTorsoCompact(${"%.1f".format(torsoSpanY)}) " +
-                "legs=$legsNotExtended(${"%.1f".format(legLengthY)}) head=$headIsNearest(conf=${"%.2f".format(nose.confidence)}) " +
-                "shoulders=$shouldersLevel hips=$hipsVisible(${"%.2f".format(lHip.confidence)}/${"%.2f".format(rHip.confidence)})")
+                if (shoulderConfident && hipConfident) {
+                    // Midpoints of shoulders and hips in the corrected floor plane
+                    val sMidX = (cLS.position.x + cRS.position.x) / 2f
+                    val sMidY = (cLS.position.y + cRS.position.y) / 2f
+                    val hMidX = (cLH.position.x + cRH.position.x) / 2f
+                    val hMidY = (cLH.position.y + cRH.position.y) / 2f
 
-            // 2. Prone: face-down (shoulders visible, face hidden).
-            //    Guard updated to match the elevated-mount recalibration above: the old
-            //    "box is landscape" check (w > h * 0.8) assumed eye-level geometry where a
-            //    standing/sitting box is tall and narrow. The new compact standing signature
-            //    can itself read as landscape-ish from this camera's downward angle, so a
-            //    standing baby with an occluded face (hands, blanket) could wrongly pass that
-            //    old guard. Instead, gate on the ELONGATED-torso signature (not torso-compact)
-            //    that now specifically distinguishes lying flat from standing at this angle.
-            val shouldersVisible = lShoulder.confidence > 0.4f || rShoulder.confidence > 0.4f
-            val isProne = shouldersVisible && isFaceHidden(nose, kpts[1], kpts[2]) && !isTorsoCompact
+                    val dx       = hMidX - sMidX
+                    val dy       = hMidY - sMidY
+                    val spineLen = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+
+                    // In the corrected top-down view:
+                    //   LYING (supine/prone): baby's spine stretches across the floor plane
+                    //     → spineLen is a large fraction of MODEL_SIZE (e.g. 200-450 px of 640)
+                    //   STANDING: spine projects toward the camera → heavily foreshortened
+                    //     → spineLen collapses to a very small value (< 18% of MODEL_SIZE ≈ 115 px)
+                    //
+                    // The 0.18 threshold was derived from the observed "torso appears shorter
+                    // when standing" geometry of the reported 30-45° downward mount angle;
+                    // adjust slightly if detections are borderline (log spineLen to tune).
+                    val standingBySpine = spineLen < CribCalibrationManager.MODEL_SIZE * 0.18f &&
+                                          cNose.confidence > 0.28f   // head visible from above
+
+                    isStanding = standingBySpine
+                    // Prone = lying flat AND face occluded; spine length does NOT discriminate
+                    // supine from prone — only face visibility does.
+                    val shouldersVisible = cLS.confidence > 0.35f || cRS.confidence > 0.35f
+                    isProne = !isStanding && shouldersVisible &&
+                              isFaceHidden(nose, kpts[1], kpts[2])
+
+                    Log.d("BabyGuard_Posture",
+                        "[CALIB] standing=$isStanding prone=$isProne | " +
+                        "spineLen=${"%.1f".format(spineLen)} " +
+                        "(thresh=${"%.1f".format(CribCalibrationManager.MODEL_SIZE * 0.18f)}) " +
+                        "noseConf=${"%.2f".format(cNose.confidence)}")
+                } else {
+                    // Keypoint confidence too low to trust the corrected measurement —
+                    // fall back to a conservative "no detection" rather than guess wrong.
+                    isStanding = false; isProne = false
+                    Log.d("BabyGuard_Posture",
+                        "[CALIB] skipped — low keypoint confidence " +
+                        "(sh=${shoulderConfident} hip=${hipConfident})")
+                }
+            } else {
+                // ── PATH B: uncalibrated box-fraction fallback ────────────────────
+                // Same heuristics as before the homography work — still functional,
+                // just less reliable at steep camera angles.
+                val hipY      = (lHip.position.y      + rHip.position.y)      / 2f
+                val ankleY    = (lAnkle.position.y    + rAnkle.position.y)    / 2f
+                val shoulderY = (lShoulder.position.y + rShoulder.position.y) / 2f
+
+                val legLengthY     = Math.abs(ankleY - hipY)
+                val shouldersLevel = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.20f)
+                val hipsVisible    = lHip.confidence > 0.22f || rHip.confidence > 0.22f
+                val torsoSpanY     = Math.abs(shoulderY - hipY)
+                val isBoxCompact   = h < (w * 1.3f)
+                val headIsNearest  = nose.confidence > 0.30f && nose.position.y < (cy - h * 0.08f)
+                val isTorsoCompact = torsoSpanY < (h * 0.32f)
+                val legsNotExtended = legLengthY < (h * 0.30f)
+
+                val standingPrimary = isBoxCompact && isTorsoCompact && legsNotExtended &&
+                                      headIsNearest && shouldersLevel && hipsVisible
+                val standingFallback = isTorsoCompact && legsNotExtended &&
+                                       h < (w * 1.5f) && nose.confidence > 0.35f &&
+                                       headIsNearest && shouldersLevel
+                isStanding = standingPrimary || standingFallback
+
+                val shouldersVisible = lShoulder.confidence > 0.4f || rShoulder.confidence > 0.4f
+                isProne = shouldersVisible && isFaceHidden(nose, kpts[1], kpts[2]) && !isTorsoCompact
+
+                Log.d("BabyGuard_Posture",
+                    "[NO-CALIB] standing=$isStanding prone=$isProne | " +
+                    "torso=$isTorsoCompact(${"%.1f".format(torsoSpanY)}) " +
+                    "legs=$legsNotExtended(${"%.1f".format(legLengthY)}) " +
+                    "head=$headIsNearest(conf=${"%.2f".format(nose.confidence)})")
+            }
 
             return BoundingBox(box, "baby", bestScore, isStanding, isProne, kpts)
         }

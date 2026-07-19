@@ -15,6 +15,23 @@ class SafetyPipeline(
     private var currentState = State.DORMANT
     fun getState(): State = currentState
     fun updateSensitivity(s: Int) { sensitivity = s.coerceIn(1, 3) }
+
+    /**
+     * Clears all internal state: posture streaks, consensus buffer, hysteresis, mood history,
+     * and presence lock. Call after calibration or when the Parent dismisses a HIGH alert so
+     * the pipeline starts fresh and doesn't stay stuck in a latched HIGH tier.
+     */
+    fun forceReset() {
+        proneStreak = 0; standingStreak = 0
+        agitationStreak = 0; extraEntityStreak = 0
+        suffocationTimerStart = 0L
+        heldTierRank = 0; fallingSince = 0L; heldStatus = ""; heldAction = ""
+        moodHistory.clear()
+        resultBuffer.clear()
+        lastBabyDetectedTime = 0L
+        currentState = State.DORMANT
+        lastMotionLevel = 0
+    }
     /** True if YOLO confirmed a person within the last PRESENCE_LOCK_MS. */
     fun isBabyPresentRecently(): Boolean =
         System.currentTimeMillis() - lastBabyDetectedTime < PRESENCE_LOCK_MS

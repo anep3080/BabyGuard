@@ -56,6 +56,16 @@
             android:name=".ParentActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".CribCalibrationActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".OnboardingActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <meta-data
             android:name="preloaded_fonts"
             android:resource="@array/preloaded_fonts" />

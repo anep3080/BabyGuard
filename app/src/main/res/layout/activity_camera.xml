@@ -312,7 +312,7 @@
                 style="@style/Widget.BabyGuard.Button.Pill"/>
         </LinearLayout>
 
-        <!-- Row 2b: Camera selector -->
+        <!-- Row 2b: Camera selector + Calibrate button -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -322,13 +322,38 @@
 
             <Button
                 android:id="@+id/btnCameraSelector"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="34dp"
+                android:layout_weight="1"
                 android:text="📷 Internal Camera"
                 android:textAllCaps="false"
                 android:textColor="#AAAACC"
                 android:textSize="12sp"
                 android:backgroundTint="#22FFFFFF"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
+
+            <Button
+                android:id="@+id/btnCalibrateRoi"
+                android:layout_width="wrap_content"
+                android:layout_height="34dp"
+                android:layout_marginStart="6dp"
+                android:text="⚙️ Calibrate"
+                android:textAllCaps="false"
+                android:textColor="#00D4AA"
+                android:textSize="12sp"
+                android:backgroundTint="#2200D4AA"
+                style="@style/Widget.BabyGuard.Button.Pill"/>
+
+            <Button
+                android:id="@+id/btnClearCalib"
+                android:layout_width="wrap_content"
+                android:layout_height="34dp"
+                android:layout_marginStart="4dp"
+                android:text="🗑️ Clear"
+                android:textAllCaps="false"
+                android:textColor="#FF6B6B"
+                android:textSize="12sp"
+                android:backgroundTint="#22FF6B6B"
                 style="@style/Widget.BabyGuard.Button.Pill"/>
         </LinearLayout>
 
@@ -413,6 +438,24 @@
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>
+
+    <!-- ── Uncalibrated banner — shown until user taps ⚙️ Calibrate ─────────────────
+         Tappable: launches CribCalibrationActivity. Hidden once calibration is saved. -->
+    <TextView
+        android:id="@+id/tvCalibBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginBottom="264dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:background="#CC8B6914"
+        android:gravity="center"
+        android:padding="8dp"
+        android:text="⚠️ Crib not calibrated — tap here (or ⚙️ Calibrate below) for angle-correct posture detection"
+        android:textColor="#FFD27F"
+        android:textSize="11sp"
+        android:visibility="gone" />
 
     <!-- ── Black screen overlay (sleep mode) ─────────────────────────────────────── -->
     <FrameLayout

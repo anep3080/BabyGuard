@@ -42,7 +42,7 @@ class MotionDetector {
             Utils.bitmapToMat(bitmap, matFrame)
 
             // 7×7 blur: less aggressive than the old 9×9, preserves sharper motion edges
-            // while still killing high-frequency sensor noise on the Note 9.
+            // while still killing high-frequency sensor noise
             Imgproc.GaussianBlur(matFrame, blurredFrame, Size(7.0, 7.0), 0.0)
 
             // Centre-weighted ROI — ignore 15 % border on each side
@@ -80,6 +80,15 @@ class MotionDetector {
             Log.e("BabyGuard_MOG2", "Motion detection failed: ${e.message}")
             return 0
         }
+    }
+
+    /**
+     * Clears the MOG2 background model so it rebuilds from scratch on the next frames.
+     * Call after returning from CribCalibrationActivity (which briefly took over the camera
+     * and left the background model stale) or after any other break in the video feed.
+     */
+    fun resetBackground() {
+        mog2.clear()
     }
 
     fun close() {
