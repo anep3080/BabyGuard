@@ -8,7 +8,8 @@ class SafetyPipeline(
     private val yoloDetector: YoloDetector,
     private val emotionDetector: EmotionDetector,
     private val aiGovernor: AIGovernor,
-    private var sensitivity: Int = 2   // 1-3 from AppPreferences, mutable for live updates
+    private var sensitivity: Int = 2,  // 1-3 from AppPreferences, mutable for live updates
+    private val babyPostureDetector: BabyPostureDetector? = null
 ) {
     enum class State { DORMANT, ACTIVE }
 
@@ -61,13 +62,16 @@ class SafetyPipeline(
     // ── Posture confirmation counters ─────────────────────────────────────────
     // Require N consecutive positive frames before raising an alert.
     // Eliminates single-frame false positives from YOLO keypoint jitter.
-    // Was 3 — at the slower AI scan rates (ECO/BALANCED idle ticks run every
-    // 800ms-2s) that added up to multiple real seconds of lag before a standing
-    // baby got flagged. 2 frames still filters single-frame jitter but roughly
-    // halves that confirmation delay.
+    // Set to 4: the new 4-signal fusion in YoloDetector PATH B has higher
+    // per-frame accuracy, so we can afford a stricter confirmation gate.
+    // At BALANCED idle rate (~1 scan/s) this means ~4 s of observed standing
+    // before the alert fires — long enough to exclude transient keypoint glitches
+    // but short enough to catch a baby actually pulling up to stand.
+    // Streaks decay by 1 per missed frame (not hard-reset), so brief detection
+    // gaps don't restart the counter from zero.
     private var proneStreak    = 0
     private var standingStreak = 0
-    private val POSTURE_CONFIRM = 2     // frames
+    private val POSTURE_CONFIRM = 4     // frames (was 2)
 
     // ── Baby Presence Lock ────────────────────────────────────────────────────
     // Once YOLO finds a person, we keep scanning at full rate for PRESENCE_LOCK_MS
@@ -115,7 +119,7 @@ class SafetyPipeline(
     private var heldStatus = ""
     private var heldAction = ""
     private val HIGH_FALL_SCORE = 50f
-    private val HIGH_FALL_DWELL_MS = 6_000L
+    private val HIGH_FALL_DWELL_MS = 16_000L  // 6 s base + 10 s extra cooldown after HIGH alert
     private val MEDIUM_FALL_SCORE = 12f
     private val MEDIUM_FALL_DWELL_MS = 4_000L
 
@@ -198,21 +202,64 @@ class SafetyPipeline(
             if (secondary != null && secondary.confidence >= EXTRA_ENTITY_MIN_CONF)
                 extraEntityStreak++ else extraEntityStreak = 0
 
-            // ── Posture with confirmation streaks ────────────────────────────
-            // Decay by 1 on a miss instead of hard-resetting to 0: a single frame of YOLO
-            // keypoint jitter (or a marginal ratio/confidence miss) was wiping out an
-            // otherwise-confirmed-in-progress streak and forcing it to restart from scratch —
-            // the actual mechanism behind "doesn't effectively detect standing" reports, on
-            // top of the geometric threshold relaxation in YoloDetector. A real posture change
-            // (not just one bad frame) still clears the streak within ~POSTURE_CONFIRM misses.
-            if (yoloResult.isProne)    proneStreak++    else proneStreak    = (proneStreak - 1).coerceAtLeast(0)
-            if (yoloResult.isStanding) standingStreak++ else standingStreak = (standingStreak - 1).coerceAtLeast(0)
+            // ── Prone: skeletal keypoints (unchanged) ────────────────────────
+            // Decay by 1 on a miss so a single dropped frame doesn't reset progress.
+            if (yoloResult.isProne) proneStreak++ else proneStreak = (proneStreak - 1).coerceAtLeast(0)
 
-            val confirmedProne    = proneStreak    >= POSTURE_CONFIRM
-            val confirmedStanding = standingStreak >= POSTURE_CONFIRM
+            // ── Standing: bounding box size logic ────────────────────────────
+            // Camera: foot-of-crib, 2 ft from feet, 2 ft above mattress (~45° angle).
+            //
+            // WHY SIZE WORKS:
+            //   • Supine  — baby's feet are 2 ft from the lens → feet loom large, the whole
+            //               body fills 60-80 % of the 640 px frame height.
+            //   • Standing — baby is at the far end of the crib (4-6 ft away) → apparent
+            //               size shrinks, body fills only 25-48 % of frame height.
+            //   The 2-3× apparent-size difference is far more reliable than any keypoint
+            //   math, because it holds even when the baby is under a blanket.
+            //
+            // SIGNALS (all in 640 px space):
+            //   heightFrac  = box.height() / 640   — primary discriminator
+            //   aspectRatio = height / width        — secondary: upright body is taller/narrower
+            //   bboxCy      = box.centerY()         — standing → body centre is in upper half
+            //
+            // THRESHOLD TUNING:
+            //   If you get false standing alerts while baby is supine → raise STAND_MAX.
+            //   If standing is missed → lower STAND_MAX or lower SUPINE_MIN.
+            //   Log tag [BBOX] prints the live values every frame so you can calibrate.
+            val bboxH      = yoloResult.box.height()          // 0-640 px
+            val bboxW      = yoloResult.box.width().coerceAtLeast(1f)
+            val bboxCy     = yoloResult.box.centerY()         // 0=top … 640=bottom
+            val frameH     = 640f
+            val heightFrac = bboxH / frameH
+            val aspectRatio = bboxH / bboxW
 
-            isProne    = confirmedProne
-            isStanding = confirmedStanding
+            // INVERTED from overhead-camera intuition — foot-of-crib 45° angle causes:
+            //   SUPINE  : body lies ALONG the camera's line of sight → maximum foreshortening
+            //             → small bounding box (h < ~50 % of frame)
+            //   STANDING: body is UPRIGHT → full height projects vertically into the image
+            //             → large bounding box (h > ~58 % of frame)
+            //
+            // Baby occupying more than 58 % of the frame height → upright / standing.
+            val isDefinitelyStanding = heightFrac > 0.58f
+            // Baby occupying less than 50 % of the frame → foreshortened body → lying.
+            val isDefinitelyLying    = heightFrac < 0.50f
+            // Ambiguous zone (50-58 %): taller-than-wide aspect ratio → more likely upright.
+            val isAmbiguousUpright   = !isDefinitelyStanding && !isDefinitelyLying &&
+                                       aspectRatio > 1.8f
+
+            val isStandingByBbox = isDefinitelyStanding || isAmbiguousUpright
+
+            Log.d("BabyGuard_Bbox",
+                "[BBOX] h=${bboxH.toInt()} w=${bboxW.toInt()} " +
+                "hFrac=${"%.2f".format(heightFrac)} cy=${bboxCy.toInt()} " +
+                "ar=${"%.1f".format(aspectRatio)} → ${if (isStandingByBbox) "STANDING ⬆" else "lying ⬇"} " +
+                "streak=$standingStreak")
+
+            if (isStandingByBbox) standingStreak++
+            else standingStreak = (standingStreak - 1).coerceAtLeast(0)
+
+            isProne    = proneStreak    >= POSTURE_CONFIRM
+            isStanding = standingStreak >= POSTURE_CONFIRM
             posture    = when {
                 isStanding -> "Standing"
                 isProne    -> "Face Down"

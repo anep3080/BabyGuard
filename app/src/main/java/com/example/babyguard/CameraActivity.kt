@@ -413,7 +413,8 @@ class CameraActivity : AppCompatActivity() {
         cameraExecutor    = Executors.newSingleThreadExecutor()
         safetyPipeline    = SafetyPipeline(
             motionDetector, yoloDetector, emotionDetector, aiGovernor,
-            sensitivity = prefs.motionSensitivity
+            sensitivity           = prefs.motionSensitivity,
+            babyPostureDetector   = BabyPostureDetector(this)
         )
 
         // ── Crib calibration: load saved corners and push homography to YOLO ──
@@ -441,6 +442,25 @@ class CameraActivity : AppCompatActivity() {
                 "Calibration cleared — using default posture detection",
                 Toast.LENGTH_LONG).show()
         }
+
+        // Long-press the clear-calibration button to manually calibrate the POSTURE
+        // reference (teach the app what the baby looks like when supine).
+        // Point the camera at the sleeping baby first, then long-press.
+        findViewById<View>(R.id.btnClearCalib)?.setOnLongClickListener {
+            val lastDetection = yoloDetector.getLastDetection()
+            if (lastDetection != null) {
+                yoloDetector.calibrateSupineNow(lastDetection)
+                Toast.makeText(this,
+                    "✅ Posture calibrated — supine reference saved",
+                    Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this,
+                    "⚠️ No baby detected yet — point camera at sleeping baby first",
+                    Toast.LENGTH_LONG).show()
+            }
+            true
+        }
+
         // Hide the clear button when not calibrated (nothing to clear)
         findViewById<View>(R.id.btnClearCalib)?.isVisible = prefs.isCribCalibrated
 

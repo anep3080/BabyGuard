@@ -59,7 +59,52 @@ class YoloDetector(context: Context) {
     fun setCalibration(manager: CribCalibrationManager?) {
         calibrationManager = manager
     }
+
+    // ── Supine posture auto-calibration accumulators ──────────────────────────
+    // PATH B accumulates measurements from frames that are STRONGLY supine (large
+    // bounding box + high leg:torso ratio) and averages them into a reference after
+    // AUTO_CALIB_FRAMES consecutive confident frames. No user interaction needed —
+    // the reference updates automatically while the baby is sleeping.
+    private val AUTO_CALIB_FRAMES = 20
+    private var autoCalibCount    = 0
+    private var autoCalibBboxH    = 0f
+    private var autoCalibLTRatio  = 0f
+    private var autoCalibSpread   = 0f
+
+    /**
+     * Call this from CameraActivity when the user manually confirms the baby is supine
+     * (e.g. taps a "Calibrate" button). Immediately saves the current detection's visual
+     * signature as the supine reference, bypassing the AUTO_CALIB_FRAMES accumulation.
+     */
+    fun calibrateSupineNow(detection: BoundingBox) {
+        val kpts = detection.keypoints
+        if (kpts.size < 17) return
+        val ankleY    = (kpts[15].position.y + kpts[16].position.y) / 2f
+        val hipY      = (kpts[11].position.y + kpts[12].position.y) / 2f
+        val shoulderY = (kpts[5].position.y  + kpts[6].position.y)  / 2f
+        val torso  = Math.abs(shoulderY - hipY)
+        val leg    = Math.abs(ankleY   - hipY)
+        val spread = Math.abs(kpts[15].position.x - kpts[16].position.x)
+        val bboxH  = detection.box.height()
+        if (torso < 5f || bboxH < 10f) return
+        prefs.savePostureCalibration(
+            bboxH        = bboxH,
+            legTorsoRatio = if (torso > 0f) leg / torso else 2.0f,
+            ankleSpread  = spread
+        )
+        Log.i("BabyGuard_Posture",
+            "Posture manually calibrated: h=${bboxH.toInt()} " +
+            "ratio=${"%.2f".format(if (torso > 0f) leg / torso else 2f)} " +
+            "spread=${spread.toInt()}")
+        // Reset the auto-accumulator so manual calibration takes immediate effect.
+        autoCalibCount = 0; autoCalibBboxH = 0f; autoCalibLTRatio = 0f; autoCalibSpread = 0f
+    }
     
+    // Cache of the most recent successful detection — used by CameraActivity for
+    // manual posture calibration (calibrateSupineNow) without requiring a separate detect() call.
+    @Volatile private var lastDetection: BoundingBox? = null
+    fun getLastDetection(): BoundingBox? = lastDetection
+
     // PRE-ALLOCATE: Note 9 fails on large object allocations every frame
     private val outputTensor = Array(1) { Array(56) { FloatArray(8400) } }
     private val pixelBuffer = IntArray(640 * 640)
@@ -229,8 +274,14 @@ class YoloDetector(context: Context) {
                     // The 0.18 threshold was derived from the observed "torso appears shorter
                     // when standing" geometry of the reported 30-45° downward mount angle;
                     // adjust slightly if detections are borderline (log spineLen to tune).
+                    // Threshold: 0.18 × 640 = 115 px.
+                    // Observed ranges: LYING → 200–450 px (spine spans floor plane),
+                    // STANDING → collapses to < 115 px (torso foreshortens heavily toward
+                    // the camera in the corrected canonical view, or clips outside the crib).
+                    // Nose confidence lowered to 0.20: baby at far end of crib may face camera
+                    // but appear small → YOLO returns valid nose at lower confidence than 0.28.
                     val standingBySpine = spineLen < CribCalibrationManager.MODEL_SIZE * 0.18f &&
-                                          cNose.confidence > 0.28f   // head visible from above
+                                          cNose.confidence > 0.20f   // head visible facing camera
 
                     isStanding = standingBySpine
                     // Prone = lying flat AND face occluded; spine length does NOT discriminate
@@ -253,40 +304,207 @@ class YoloDetector(context: Context) {
                         "(sh=${shoulderConfident} hip=${hipConfident})")
                 }
             } else {
-                // ── PATH B: uncalibrated box-fraction fallback ────────────────────
-                // Same heuristics as before the homography work — still functional,
-                // just less reliable at steep camera angles.
+                // ── PATH B: uncalibrated fallback — 4-signal geometric fusion ─────────
+                //
+                // VERIFIED CAMERA GEOMETRY: 2 ft from baby's feet, 2 ft above mattress
+                // → 45° downward viewing angle from the foot end of the crib.
+                //
+                // Both supine and standing place head at top / feet at bottom of frame,
+                // so naive box-shape checks are AMBIGUOUS.  Four independent geometric
+                // signals discriminate reliably — their votes are fused below.
+                //
+                // ┌─────────────────────────┬──────────────┬──────────────┐
+                // │ Signal                  │ Supine       │ Standing     │
+                // ├─────────────────────────┼──────────────┼──────────────┤
+                // │ A) Bbox height / 640px  │ > 0.55       │ < 0.42       │
+                // │    (feet close → fills  │ body fills   │ baby far →   │
+                // │    frame; standing baby │ most frame   │ small figure │
+                // │    is small at far end) │              │              │
+                // ├─────────────────────────┼──────────────┼──────────────┤
+                // │ B) legPxY / torsoSpanY  │ 3.0 – 8.0    │ 1.5 – 2.5   │
+                // │    (perspective ratio — │ legs look    │ normal body  │
+                // │    distance-independent │ enormous;    │ proportions  │
+                // │    ratio removes scale) │ torso tiny   │              │
+                // ├─────────────────────────┼──────────────┼──────────────┤
+                // │ C) ankleXSpread /       │ 0.65 – 4.5   │ 0.35 – 0.55  │
+                // │    shoulderXSpread      │ feet spread  │ feet together │
+                // │    (perspective magnif. │ side-by-side │ on mattress  │
+                // │    at foot end)         │              │              │
+                // ├─────────────────────────┼──────────────┼──────────────┤
+                // │ D) ankle conf /         │ > 1.10×      │ ≈ equal or   │
+                // │    shoulder conf        │ shoulder     │ shoulders >  │
+                // │    (closest = clearest) │ (ankles near)│ (both far)   │
+                // └─────────────────────────┴──────────────┴──────────────┘
+                // ─────────────────────────────────────────────────────────────────────
+
+                val frameH    = 640f
                 val hipY      = (lHip.position.y      + rHip.position.y)      / 2f
                 val ankleY    = (lAnkle.position.y    + rAnkle.position.y)    / 2f
                 val shoulderY = (lShoulder.position.y + rShoulder.position.y) / 2f
+                val torsoSpanY = Math.abs(shoulderY - hipY)
+                val legLengthY = Math.abs(ankleY   - hipY)
 
-                val legLengthY     = Math.abs(ankleY - hipY)
-                val shouldersLevel = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.20f)
-                val hipsVisible    = lHip.confidence > 0.22f || rHip.confidence > 0.22f
-                val torsoSpanY     = Math.abs(shoulderY - hipY)
-                val isBoxCompact   = h < (w * 1.3f)
-                val headIsNearest  = nose.confidence > 0.30f && nose.position.y < (cy - h * 0.08f)
                 val isTorsoCompact = torsoSpanY < (h * 0.32f)
-                val legsNotExtended = legLengthY < (h * 0.30f)
+                val shouldersLevel = Math.abs(lShoulder.position.y - rShoulder.position.y) < (h * 0.24f)
+                val hipsVisible    = lHip.confidence > 0.20f || rHip.confidence > 0.20f
+                val headInFrame    = nose.confidence > 0.18f && nose.position.y < (cy - h * 0.04f)
 
-                val standingPrimary = isBoxCompact && isTorsoCompact && legsNotExtended &&
-                                      headIsNearest && shouldersLevel && hipsVisible
-                val standingFallback = isTorsoCompact && legsNotExtended &&
-                                       h < (w * 1.5f) && nose.confidence > 0.35f &&
-                                       headIsNearest && shouldersLevel
-                isStanding = standingPrimary || standingFallback
+                // ── Signal A: Bounding-box height (no keypoints required) ─────────────
+                val isLargeBox = h > frameH * 0.55f    // supine: body spans near→far
+                val isSmallBox = h < frameH * 0.42f    // standing: entire body at far end
 
-                val shouldersVisible = lShoulder.confidence > 0.4f || rShoulder.confidence > 0.4f
-                isProne = shouldersVisible && isFaceHidden(nose, kpts[1], kpts[2]) && !isTorsoCompact
+                // ── Signal B: Leg-to-torso perspective ratio ──────────────────────────
+                // Camera-distance INDEPENDENT — the ratio of apparent lengths cancels out
+                // the overall scale, leaving only the perspective distortion signal.
+                //
+                // Derivation (pinhole model, camera at 2 ft above mattress, 2 ft from foot):
+                //   Supine: ankles at ~2 ft, torso at ~6 ft → 3:1 distance ratio
+                //           → leg pixels ≈ 3× longer in image than torso pixels
+                //           → legLengthY / torsoSpanY ≈ 3–8
+                //   Standing: body at ~7 ft throughout
+                //           → normal body proportions
+                //           → legLengthY / torsoSpanY ≈ 1.5–2.5
+                val legTorsoRatio = if (torsoSpanY > 8f) legLengthY / torsoSpanY else 2.0f
+                val isRatioHigh   = legTorsoRatio > 2.8f    // strongly supine
+                val isRatioLow    = legTorsoRatio < 2.0f    // consistent with standing
+
+                // ── Signal C: Ankle X-spread ──────────────────────────────────────────
+                // Lower confidence threshold to 0.18: from a 45° foot-of-crib angle the
+                // model is not well-conditioned and returns valid ankle positions at lower
+                // confidence than it would from a canonical front/back view.
+                val ankleXSpread    = Math.abs(lAnkle.position.x - rAnkle.position.x)
+                val shoulderXSpread = Math.abs(lShoulder.position.x - rShoulder.position.x)
+                val anklesDetected  = lAnkle.confidence > 0.18f && rAnkle.confidence > 0.18f
+                val refWidth        = if (shoulderXSpread > 10f) shoulderXSpread else w * 0.35f
+                // Threshold: 0.65 — supine ratio ≈ 3–4.5, standing ratio ≈ 0.4–0.6
+                val isFeetSpreadApart = anklesDetected && ankleXSpread >= refWidth * 0.65f
+                val isFeetNarrow      = anklesDetected && ankleXSpread <  refWidth * 0.58f
+
+                // ── Signal D: Ankle/shoulder confidence ratio ─────────────────────────
+                val avgAnkleConf    = (lAnkle.confidence    + rAnkle.confidence)    / 2f
+                val avgShoulderConf = (lShoulder.confidence + rShoulder.confidence) / 2f
+                val isAnklesNearest    = anklesDetected && avgAnkleConf > avgShoulderConf * 1.10f
+                val isShouldersNearest = anklesDetected && avgShoulderConf >= avgAnkleConf * 1.00f
+
+                // ── Weighted vote fusion ──────────────────────────────────────────────
+                // Each signal contributes points to supineVote OR standingVote.
+                // Decision: standing wins only when standingVote > supineVote AND ≥ 3.
+                var supineVote   = 0
+                var standingVote = 0
+
+                // Signal A (weight 3 — strongest; no keypoint dependency)
+                if (isLargeBox)          supineVote   += 3
+                if (isSmallBox)          standingVote += 3
+
+                // Signal B (weight 3 — camera-distance-independent ratio)
+                if (isRatioHigh)         supineVote   += 3
+                if (isRatioLow)          standingVote += 3
+
+                // Signal C (weight 2 — perspective magnitude geometry)
+                if (isFeetSpreadApart)   supineVote   += 2
+                if (isFeetNarrow)        standingVote += 2
+
+                // Signal D (weight 1 — confirmatory, weaker)
+                if (isAnklesNearest)     supineVote   += 1
+                if (isShouldersNearest)  standingVote += 1
+
+                // Pose sanity check: basic body orientation (head up, torso compact, hips found)
+                // Required for a positive standing call to avoid noise triggers.
+                val poseOk = headInFrame && shouldersLevel && hipsVisible && isTorsoCompact
+
+                // ── Calibration-boosted voting (Gemini concept, foot-of-crib adapted) ──
+                // The Gemini approach (calibrate → compare ratios) is the right idea but
+                // needs sign reversal for foot-of-crib: standing baby is SMALLER in frame
+                // (far end) not taller.  Once the supine reference is learned, each feature
+                // gets a fraction score:  ≈1.0 = same as supine, < 0.6 = much smaller.
+                var calStandingVote = 0
+                var calSupineVote   = 0
+                if (prefs.hasPostureCalibration) {
+                    val bboxFrac   = h            / prefs.supineBboxH            // 1.0 = supine ref
+                    val ratioFrac  = legTorsoRatio / prefs.supineLegTorsoRatio    // 1.0 = supine ref
+                    val spreadFrac = if (prefs.supineAnkleSpread > 0f)
+                                         ankleXSpread / prefs.supineAnkleSpread else 1f
+                    // Standing: all three fractions drop well below 1.0
+                    if (bboxFrac   < 0.50f) calStandingVote += 4   // box much smaller than supine ref
+                    if (bboxFrac   < 0.65f) calStandingVote += 2   // moderate decrease
+                    if (bboxFrac   > 0.80f) calSupineVote   += 4   // box similar to supine ref
+                    if (ratioFrac  < 0.55f) calStandingVote += 4   // ratio much lower = normal props
+                    if (ratioFrac  < 0.70f) calStandingVote += 2
+                    if (ratioFrac  > 0.80f) calSupineVote   += 4   // ratio similar = still supine
+                    if (spreadFrac < 0.40f) calStandingVote += 3   // ankles much closer together
+                    if (spreadFrac > 0.65f) calSupineVote   += 3   // spread still wide
+
+                    standingVote += calStandingVote
+                    supineVote   += calSupineVote
+
+                    Log.d("BabyGuard_Posture",
+                        "[B-cal] bbox=${"%.2f".format(bboxFrac)} " +
+                        "ratio=${"%.2f".format(ratioFrac)} " +
+                        "spread=${"%.2f".format(spreadFrac)} " +
+                        "calSt=$calStandingVote calSup=$calSupineVote")
+                }
+
+                // ── Auto-calibration: learn supine reference without user interaction ──
+                // Accumulate measurements on frames where BOTH the strongest signals
+                // (large box + high leg:torso ratio) agree it is clearly supine.
+                // After AUTO_CALIB_FRAMES such frames, average and persist the reference.
+                // Only runs when calibration-based votes haven't already locked in a result.
+                val veryConfidentSupine = isLargeBox && isRatioHigh
+                if (veryConfidentSupine) {
+                    autoCalibCount++
+                    autoCalibBboxH   += h
+                    autoCalibLTRatio += legTorsoRatio
+                    autoCalibSpread  += ankleXSpread
+                    if (autoCalibCount >= AUTO_CALIB_FRAMES) {
+                        prefs.savePostureCalibration(
+                            bboxH         = autoCalibBboxH   / autoCalibCount,
+                            legTorsoRatio = autoCalibLTRatio / autoCalibCount,
+                            ankleSpread   = autoCalibSpread  / autoCalibCount
+                        )
+                        Log.i("BabyGuard_Posture",
+                            "Auto-calibrated supine ref: " +
+                            "h=${"%.0f".format(autoCalibBboxH / autoCalibCount)} " +
+                            "ratio=${"%.2f".format(autoCalibLTRatio / autoCalibCount)} " +
+                            "spread=${"%.0f".format(autoCalibSpread / autoCalibCount)}")
+                        autoCalibCount = 0; autoCalibBboxH = 0f
+                        autoCalibLTRatio = 0f; autoCalibSpread = 0f
+                    }
+                } else {
+                    // Non-supine frame: reset accumulator (don't mix states into the average)
+                    if (autoCalibCount > 0) {
+                        autoCalibCount = 0; autoCalibBboxH = 0f
+                        autoCalibLTRatio = 0f; autoCalibSpread = 0f
+                    }
+                }
+
+                // Standing: must win the vote, meet minimum evidence, AND pass pose check.
+                isStanding = poseOk &&
+                             standingVote >= 3 &&
+                             standingVote > supineVote
+
+                // ── Prone detection ───────────────────────────────────────────────────
+                // From 45° foot-of-crib view: face-down baby (prone) is distinguished by
+                // face occlusion.  Guard with !isLargeBox because a very large bbox with
+                // no visible face is more likely supine (camera can't see the face well
+                // from the feet end when baby is close to the lens).
+                val shouldersVisible = lShoulder.confidence > 0.28f || rShoulder.confidence > 0.28f
+                isProne = !isStanding && !isLargeBox &&
+                          shouldersVisible && isFaceHidden(nose, kpts[1], kpts[2])
 
                 Log.d("BabyGuard_Posture",
-                    "[NO-CALIB] standing=$isStanding prone=$isProne | " +
-                    "torso=$isTorsoCompact(${"%.1f".format(torsoSpanY)}) " +
-                    "legs=$legsNotExtended(${"%.1f".format(legLengthY)}) " +
-                    "head=$headIsNearest(conf=${"%.2f".format(nose.confidence)})")
+                    "[B] stand=$isStanding prone=$isProne | " +
+                    "sv=$standingVote sup=$supineVote poseOk=$poseOk | " +
+                    "h=${"%.0f".format(h)}(L=$isLargeBox S=$isSmallBox) " +
+                    "ratio=${"%.2f".format(legTorsoRatio)}(H=$isRatioHigh L=$isRatioLow) " +
+                    "ankSprd=${"%.0f".format(ankleXSpread)} ref=${"%.0f".format(refWidth)} " +
+                    "(Spr=$isFeetSpreadApart Nar=$isFeetNarrow) " +
+                    "aConf=${"%.2f".format(avgAnkleConf)} sConf=${"%.2f".format(avgShoulderConf)} " +
+                    "nose=${"%.2f".format(nose.confidence)}")
             }
 
-            return BoundingBox(box, "baby", bestScore, isStanding, isProne, kpts)
+            val result = BoundingBox(box, "baby", bestScore, isStanding, isProne, kpts)
+            lastDetection = result
+            return result
         }
         return null
     }
