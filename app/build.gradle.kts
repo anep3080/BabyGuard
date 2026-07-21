@@ -22,11 +22,20 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // ── ABI filter: arm64-v8a only ────────────────────────────────────
+        // Strips armeabi-v7a / x86 / x86_64 native libs from OpenCV,
+        // TFLite, TFLite-GPU, MediaPipe, USB camera — saves ~60–80 MB.
+        // arm64-v8a covers all modern Android phones (S25, Note 9, etc.).
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            // isShrinkResources = true     // re-enable once keep rules are verified
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
